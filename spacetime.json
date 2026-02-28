@@ -1,0 +1,5 @@
+{
+  "server": "maincloud",
+  "module_path": "./spacetimedb",
+  "database": "snek-io"
+}
