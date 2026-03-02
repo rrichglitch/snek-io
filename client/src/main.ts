@@ -60,8 +60,9 @@ class SoundManager {
   private deathSound: HTMLAudioElement | null = null;
   private isInitialized: boolean = false;
   private isPlaying: boolean = false;
-  private baseVolume: number = 0.4;
-  private muffledVolume: number = 0.15;
+  // VOLUME CONTROL: Adjust baseVolume to change background music volume (0.0 to 1.0)
+  private baseVolume: number = 0.25; // Reduced from 0.4
+  private muffledVolume: number = 0.1;
   private eatSoundPlaying: boolean = false;
 
   constructor() {
@@ -116,11 +117,28 @@ class SoundManager {
     this.ensureAudioContext();
     
     if (!this.isPlaying) {
-      this.backgroundMusic.play().catch(err => {
-        console.warn('Failed to play background music (may need user interaction):', err);
-      });
-      this.isPlaying = true;
+      // Ensure audio context is running
+      if (this.audioContext?.state === 'suspended') {
+        this.audioContext.resume().then(() => {
+          this.playBackgroundMusic();
+        });
+      } else {
+        this.playBackgroundMusic();
+      }
     }
+  }
+
+  private playBackgroundMusic() {
+    if (!this.backgroundMusic) return;
+    
+    this.backgroundMusic.currentTime = 0;
+    this.backgroundMusic.play().then(() => {
+      this.isPlaying = true;
+      console.log('Background music started');
+    }).catch(err => {
+      console.warn('Failed to play background music:', err);
+      this.isPlaying = false;
+    });
   }
 
   playEatSound() {
@@ -132,24 +150,16 @@ class SoundManager {
     this.ensureAudioContext();
     this.eatSoundPlaying = true;
     
-    // Clone audio to allow overlapping sounds
-    const soundClone = this.eatSound.cloneNode() as HTMLAudioElement;
-    const source = this.audioContext.createMediaElementSource(soundClone);
-    const gain = this.audioContext.createGain();
-    
-    gain.gain.value = 0.5;
-    source.connect(gain);
-    gain.connect(this.audioContext.destination);
-    
-    soundClone.currentTime = 0;
-    soundClone.play().catch(err => {
+    // Simple approach: just play the original sound without cloning
+    // This prevents the complex audio graph issues
+    this.eatSound.currentTime = 0;
+    this.eatSound.play().then(() => {
+      // Reset flag after a short delay to allow rapid eating but prevent overlapping
+      setTimeout(() => {
+        this.eatSoundPlaying = false;
+      }, 100);
+    }).catch(err => {
       console.warn('Failed to play eat sound:', err);
-      this.eatSoundPlaying = false;
-    });
-    
-    // Cleanup after playback
-    soundClone.addEventListener('ended', () => {
-      soundClone.remove();
       this.eatSoundPlaying = false;
     });
   }
@@ -203,14 +213,14 @@ class WebGPURenderer {
   private vertexBuffer: GPUBuffer | null = null;
   private uniformBuffer: GPUBuffer | null = null;
   private canvas: HTMLCanvasElement;
-  private players: Map<string, { x: number; y: number; color: string; alive: boolean; segments: { x: number; y: number; width: number }[] }> = new Map();
+  private players: Map<string, { x: number; y: number; color: string; alive: boolean; direction: number; segments: { x: number; y: number; width: number }[] }> = new Map();
   private foods: Food[] = [];
   private myIdentity: string = '';
   private cameraX: number = 1000;
   private cameraY: number = 1000;
   private viewportWidth: number = 800;
   private viewportHeight: number = 600;
-  private maxVertices: number = 100000;
+  private maxVertices: number = 500000; // Increased from 100k to prevent invisibility bugs
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -355,7 +365,7 @@ class WebGPURenderer {
     this.viewportHeight = height;
   }
 
-  setPlayers(players: Map<string, { x: number; y: number; color: string; alive: boolean; segments: { x: number; y: number; width: number }[] }>) {
+  setPlayers(players: Map<string, { x: number; y: number; color: string; alive: boolean; direction: number; segments: { x: number; y: number; width: number }[] }>) {
     this.players = players;
   }
 
@@ -576,8 +586,23 @@ class WebGPURenderer {
                   ny = yDiff > 0 ? ny - MAP_SIZE : ny + MAP_SIZE;
                 }
                 // Angle from head to body, then flip 180° to point forward
-                angleRad = Math.atan2(ny - sy, nx - sx) + Math.PI;
+                const dx = nx - sx;
+                const dy = ny - sy;
+                // Check for invalid positions (same point)
+                if (Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001) {
+                  // Segments are at same position - use direction from player data
+                  angleRad = data.direction || 0;
+                } else {
+                  angleRad = Math.atan2(dy, dx) + Math.PI;
+                }
+                // Validate angle is not NaN
+                if (isNaN(angleRad) || !isFinite(angleRad)) {
+                  angleRad = data.direction || 0;
+                }
               }
+              
+              // Ensure we have a valid angle for rendering
+              const safeAngle = (isNaN(angleRad) || !isFinite(angleRad)) ? 0 : angleRad;
               
               // Head is larger and brighter - trapezoid shape
               const backWidth = baseWidth + 12;
@@ -589,11 +614,11 @@ class WebGPURenderer {
 
               // Shift head forward in direction of movement so it leads the body
               const headForwardShift = headLength * 0.3;
-              const headX = sx + Math.cos(angleRad) * headForwardShift;
-              const headY = sy + Math.sin(angleRad) * headForwardShift;
+              const headX = sx + Math.cos(safeAngle) * headForwardShift;
+              const headY = sy + Math.sin(safeAngle) * headForwardShift;
 
               // Draw trapezoid head pointing in direction of movement
-              this.addTrapezoidHead(vertices, headX, headY, backWidth, frontWidth, headLength, angleRad, br, bg, bb);
+              this.addTrapezoidHead(vertices, headX, headY, backWidth, frontWidth, headLength, safeAngle, br, bg, bb);
 
               // Calculate positions for eyes and nostrils relative to head
               // Eyes are positioned further back on the wide part of the head
@@ -602,15 +627,15 @@ class WebGPURenderer {
               const eyeRadius = baseWidth * 0.18; // Slightly smaller eyes
               
               // Perpendicular angle for eye offset (90 degrees from movement direction)
-              const perpAngle = angleRad + Math.PI / 2;
+              const perpAngle = safeAngle + Math.PI / 2;
               
               // Left eye position (back from center, offset perpendicular) - use headX/headY as base
-              const leftEyeX = headX - Math.cos(angleRad) * eyeBackOffset + Math.cos(perpAngle) * eyeSpacing;
-              const leftEyeY = headY - Math.sin(angleRad) * eyeBackOffset + Math.sin(perpAngle) * eyeSpacing;
+              const leftEyeX = headX - Math.cos(safeAngle) * eyeBackOffset + Math.cos(perpAngle) * eyeSpacing;
+              const leftEyeY = headY - Math.sin(safeAngle) * eyeBackOffset + Math.sin(perpAngle) * eyeSpacing;
               
               // Right eye position (back from center, offset opposite perpendicular)
-              const rightEyeX = headX - Math.cos(angleRad) * eyeBackOffset - Math.cos(perpAngle) * eyeSpacing;
-              const rightEyeY = headY - Math.sin(angleRad) * eyeBackOffset - Math.sin(perpAngle) * eyeSpacing;
+              const rightEyeX = headX - Math.cos(safeAngle) * eyeBackOffset - Math.cos(perpAngle) * eyeSpacing;
+              const rightEyeY = headY - Math.sin(safeAngle) * eyeBackOffset - Math.sin(perpAngle) * eyeSpacing;
               
               // Draw googly eyes (white sclera)
               this.addCircle(vertices, leftEyeX, leftEyeY, eyeRadius, 1, 1, 1);
@@ -619,8 +644,8 @@ class WebGPURenderer {
               // Draw pupils (black, slightly offset for googly effect - offset in direction of movement)
               const pupilRadius = eyeRadius * 0.45;
               const pupilOffset = eyeRadius * 0.3;
-              const pupilX = Math.cos(angleRad) * pupilOffset;
-              const pupilY = Math.sin(angleRad) * pupilOffset;
+              const pupilX = Math.cos(safeAngle) * pupilOffset;
+              const pupilY = Math.sin(safeAngle) * pupilOffset;
               
               this.addCircle(vertices, leftEyeX + pupilX, leftEyeY + pupilY, pupilRadius, 0, 0, 0);
               this.addCircle(vertices, rightEyeX + pupilX, rightEyeY + pupilY, pupilRadius, 0, 0, 0);
@@ -631,12 +656,12 @@ class WebGPURenderer {
               const nostrilRadius = baseWidth * 0.08;
               
               // Left nostril
-              const leftNostrilX = headX + Math.cos(angleRad) * nostrilForwardOffset + Math.cos(perpAngle) * nostrilSpacing;
-              const leftNostrilY = headY + Math.sin(angleRad) * nostrilForwardOffset + Math.sin(perpAngle) * nostrilSpacing;
+              const leftNostrilX = headX + Math.cos(safeAngle) * nostrilForwardOffset + Math.cos(perpAngle) * nostrilSpacing;
+              const leftNostrilY = headY + Math.sin(safeAngle) * nostrilForwardOffset + Math.sin(perpAngle) * nostrilSpacing;
               
               // Right nostril
-              const rightNostrilX = headX + Math.cos(angleRad) * nostrilForwardOffset - Math.cos(perpAngle) * nostrilSpacing;
-              const rightNostrilY = headY + Math.sin(angleRad) * nostrilForwardOffset - Math.sin(perpAngle) * nostrilSpacing;
+              const rightNostrilX = headX + Math.cos(safeAngle) * nostrilForwardOffset - Math.cos(perpAngle) * nostrilSpacing;
+              const rightNostrilY = headY + Math.sin(safeAngle) * nostrilForwardOffset - Math.sin(perpAngle) * nostrilSpacing;
               
               this.addCircle(vertices, leftNostrilX, leftNostrilY, nostrilRadius, 0.2, 0.1, 0.05);
               this.addCircle(vertices, rightNostrilX, rightNostrilY, nostrilRadius, 0.2, 0.1, 0.05);
@@ -726,8 +751,7 @@ class Game {
 
     await this.connectToServer();
     
-    // Start background music
-    this.soundManager.startBackgroundMusic();
+    // Background music starts in onConnect callback when SpaceTimeDB connects
     
     // Start the game loop
     requestAnimationFrame(this.gameLoop);
@@ -946,6 +970,9 @@ class Game {
         this.connected = true;
         this.setupCallbacks();
         document.getElementById('loading')?.classList.add('hidden');
+        
+        // Start background music as soon as connected (on main menu)
+        this.soundManager.startBackgroundMusic();
         
         conn.subscriptionBuilder()
           .onApplied(() => {
@@ -1313,7 +1340,7 @@ class Game {
 
   private gameLoop = () => {
     if (this.renderer && this.conn) {
-      const playerData = new Map<string, { x: number; y: number; color: string; alive: boolean; segments: { x: number; y: number; width: number }[] }>();
+      const playerData = new Map<string, { x: number; y: number; color: string; alive: boolean; direction: number; segments: { x: number; y: number; width: number }[] }>();
 
       // Add human players
       for (const [identity, player] of this.players) {
@@ -1325,6 +1352,7 @@ class Game {
           y: player.y,
           color: player.color,
           alive: player.alive,
+          direction: player.direction,
           segments: sortedSegs.map(s => ({ x: s.x, y: s.y, width: s.width }))
         });
       }
@@ -1339,6 +1367,7 @@ class Game {
           y: bot.y,
           color: bot.color,
           alive: bot.alive,
+          direction: bot.direction,
           segments: sortedSegs.map(s => ({ x: s.x, y: s.y, width: s.width }))
         });
       }
