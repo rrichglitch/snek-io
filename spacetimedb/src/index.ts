@@ -167,11 +167,14 @@ function chooseBotDirection(ctx: any, bot: any, foods: any[], players: any[], bo
     return desiredDir;
   }
 
-  // Try angles at 45-degree increments from desired direction
-  const angleOffsets = [Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2, 3 * Math.PI / 4, -3 * Math.PI / 4, Math.PI];
+  // Try angles at 45-degree increments from desired direction (excluding 180°)
+  const angleOffsets = [Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2, 3 * Math.PI / 4, -3 * Math.PI / 4];
 
   for (const offset of angleOffsets) {
     const testAngle = desiredDir + offset;
+    // Skip if this would be a 180° turn from current direction
+    const turnDiff = Math.abs(normalizeAngle(testAngle - currentDir));
+    if (turnDiff > Math.PI * 0.9 && turnDiff < Math.PI * 1.1) continue;
     if (!checkCollision(testAngle)) {
       return testAngle;
     }
@@ -198,10 +201,12 @@ function chooseBotDirection(ctx: any, bot: any, foods: any[], players: any[], bo
     if (collisionDistance < Infinity) break;
   }
 
-  // If collision imminent, pick any available escape angle
+  // If collision imminent, pick any available escape angle (not 180° from current)
   if (collisionDistance <= 3) {
     for (let i = 0; i < 8; i++) {
       const escapeAngle = (i / 8) * Math.PI * 2;
+      const turnDiff = Math.abs(normalizeAngle(escapeAngle - currentDir));
+      if (turnDiff > Math.PI * 0.9 && turnDiff < Math.PI * 1.1) continue;
       if (!checkCollision(escapeAngle)) {
         return escapeAngle;
       }
@@ -398,10 +403,25 @@ export const change_direction = spacetimedb.reducer(
       return;
     }
 
+    // Prevent 180° turns (reversing direction) - would cause instant self-collision
+    const currentDir = player.direction;
+    const angleDiff = Math.abs(normalizeAngle(direction - currentDir));
+    if (angleDiff > Math.PI * 0.9 && angleDiff < Math.PI * 1.1) {
+      // New direction is approximately 180° from current - ignore it
+      return;
+    }
+
     player.pending_direction = direction;
     ctx.db.player.identity.update({ ...player, pending_direction: direction });
   }
 );
+
+// Normalize angle to [-π, π]
+function normalizeAngle(angle: number): number {
+  while (angle > Math.PI) angle -= 2 * Math.PI;
+  while (angle < -Math.PI) angle += 2 * Math.PI;
+  return angle;
+}
 
 export const leave_game = spacetimedb.reducer(
   (ctx: any) => {
@@ -461,7 +481,15 @@ tickReducer = spacetimedb.reducer(
     
     // Move players
     for (const player of players) {
-      const newDir = player.pending_direction;
+      let newDir = player.pending_direction;
+
+      // Prevent 180° turns (reversing direction) - would cause instant self-collision
+      const currentDir = player.direction;
+      const angleDiff = Math.abs(normalizeAngle(newDir - currentDir));
+      if (angleDiff > Math.PI * 0.9 && angleDiff < Math.PI * 1.1) {
+        // Keep current direction if trying to reverse
+        newDir = currentDir;
+      }
 
       // Calculate movement using angle in radians
       const dx = Math.cos(newDir) * MOVE_SPEED;
@@ -771,7 +799,16 @@ tickReducer = spacetimedb.reducer(
     // Move bots with AI
     for (const bot of bots) {
       // Choose direction using AI
-      const newDir = chooseBotDirection(ctx, bot, foods, players, bots);
+      let newDir = chooseBotDirection(ctx, bot, foods, players, bots);
+
+      // Prevent 180° turns (reversing direction) - would cause instant self-collision
+      const currentDir = bot.direction;
+      const angleDiff = Math.abs(normalizeAngle(newDir - currentDir));
+      if (angleDiff > Math.PI * 0.9 && angleDiff < Math.PI * 1.1) {
+        // Keep current direction if trying to reverse
+        newDir = currentDir;
+      }
+
       bot.pending_direction = newDir;
 
       // Calculate movement using angle in radians
