@@ -1,0 +1,24 @@
+{
+  "timestamp": "2026-03-02T04:23:40.538Z",
+  "workspaceRoot": "/home/rrich/snek-io",
+  "activeEditor": {
+    "file": "client/src/main.ts",
+    "line": 65,
+    "column": 38,
+    "selections": [
+      {
+        "start": {
+          "line": 65,
+          "col": 38
+        },
+        "end": {
+          "line": 65,
+          "col": 38
+        }
+      }
+    ]
+  },
+  "openEditors": [
+    "client/src/main.ts"
+  ]
+}

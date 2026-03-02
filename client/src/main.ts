@@ -61,7 +61,7 @@ class SoundManager {
   private isInitialized: boolean = false;
   private isPlaying: boolean = false;
   // VOLUME CONTROL: Adjust baseVolume to change background music volume (0.0 to 1.0)
-  private baseVolume: number = 0.25; // Reduced from 0.4
+  private baseVolume: number = 0.2; // Reduced from 0.4
   private muffledVolume: number = 0.1;
   private eatSoundPlaying: boolean = false;
 
@@ -100,6 +100,10 @@ class SoundManager {
       
       this.isInitialized = true;
       console.log('SoundManager initialized');
+      
+      // Setup listeners to start music on first user interaction
+      // (Browsers block autoplay until user interacts with page)
+      this.setupUserInteractionListeners();
     } catch (error) {
       console.error('Failed to initialize SoundManager:', error);
     }
@@ -126,6 +130,25 @@ class SoundManager {
         this.playBackgroundMusic();
       }
     }
+  }
+
+  // Setup one-time listeners to start music on first user interaction
+  // (Browsers block audio autoplay until user interacts with page)
+  setupUserInteractionListeners() {
+    const startOnInteraction = () => {
+      this.ensureAudioContext();
+      if (!this.isPlaying) {
+        this.startBackgroundMusic();
+      }
+      // Remove listeners after first interaction
+      document.removeEventListener('click', startOnInteraction);
+      document.removeEventListener('keydown', startOnInteraction);
+      document.removeEventListener('touchstart', startOnInteraction);
+    };
+
+    document.addEventListener('click', startOnInteraction);
+    document.addEventListener('keydown', startOnInteraction);
+    document.addEventListener('touchstart', startOnInteraction);
   }
 
   private playBackgroundMusic() {
