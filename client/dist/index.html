@@ -285,6 +285,28 @@
       text-align: center;
       font-style: italic;
     }
+
+    #speaker-icon {
+      position: absolute;
+      top: 1rem;
+      left: 1rem;
+      font-size: 1.5rem;
+      cursor: pointer;
+      z-index: 200;
+      background: rgba(0,0,0,0.6);
+      backdrop-filter: blur(10px);
+      border-radius: 12px;
+      padding: 0.5rem 0.75rem;
+      border: 1px solid rgba(255,255,255,0.2);
+      user-select: none;
+      transition: transform 0.2s ease;
+    }
+
+    #speaker-icon:hover {
+      transform: scale(1.1);
+    }
+
+
     
     #hud.hidden {
       display: none;
@@ -353,7 +375,7 @@
       display: none;
     }
   </style>
-  <script type="module" crossorigin src="/snek-io/assets/index-DmRV5opy.js"></script>
+  <script type="module" crossorigin src="/snek-io/assets/index-Vd0OSZ8C.js"></script>
 </head>
 <body>
   <div id="app">
@@ -369,15 +391,6 @@
     </div>
     
     <canvas id="gameCanvas"></canvas>
-    
-    <div id="hud" class="hidden">
-      <div class="hud-panel">
-        <div class="name-display" id="player-name"></div>
-      </div>
-      <div class="hud-panel">
-        <div class="score-display">Score: <span id="score">0</span></div>
-      </div>
-    </div>
 
     <div id="leaderboard" class="hidden">
       <div class="leaderboard-title">Top 10</div>
@@ -391,6 +404,8 @@
     </div>
     
     <div class="loading" id="loading">Connecting to server...</div>
+    
+    <div id="speaker-icon">🔊</div>
   </div>
 </body>
 </html>

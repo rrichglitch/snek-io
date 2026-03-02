@@ -61,9 +61,10 @@ class SoundManager {
   private isInitialized: boolean = false;
   private isPlaying: boolean = false;
   // VOLUME CONTROL: Adjust baseVolume to change background music volume (0.0 to 1.0)
-  private baseVolume: number = 0.2; // Reduced from 0.4
+  private baseVolume: number = 0.18; // Reduced from 0.4
   private muffledVolume: number = 0.1;
   private eatSoundPlaying: boolean = false;
+  private muted: boolean = false;
 
   constructor() {
     this.initializeAudio();
@@ -99,11 +100,6 @@ class SoundManager {
       this.deathSound = new Audio(deathSoundUrl);
       
       this.isInitialized = true;
-      console.log('SoundManager initialized');
-      
-      // Setup listeners to start music on first user interaction
-      // (Browsers block autoplay until user interacts with page)
-      this.setupUserInteractionListeners();
     } catch (error) {
       console.error('Failed to initialize SoundManager:', error);
     }
@@ -132,32 +128,12 @@ class SoundManager {
     }
   }
 
-  // Setup one-time listeners to start music on first user interaction
-  // (Browsers block audio autoplay until user interacts with page)
-  setupUserInteractionListeners() {
-    const startOnInteraction = () => {
-      this.ensureAudioContext();
-      if (!this.isPlaying) {
-        this.startBackgroundMusic();
-      }
-      // Remove listeners after first interaction
-      document.removeEventListener('click', startOnInteraction);
-      document.removeEventListener('keydown', startOnInteraction);
-      document.removeEventListener('touchstart', startOnInteraction);
-    };
-
-    document.addEventListener('click', startOnInteraction);
-    document.addEventListener('keydown', startOnInteraction);
-    document.addEventListener('touchstart', startOnInteraction);
-  }
-
   private playBackgroundMusic() {
     if (!this.backgroundMusic) return;
     
     this.backgroundMusic.currentTime = 0;
     this.backgroundMusic.play().then(() => {
       this.isPlaying = true;
-      console.log('Background music started');
     }).catch(err => {
       console.warn('Failed to play background music:', err);
       this.isPlaying = false;
@@ -215,15 +191,35 @@ class SoundManager {
   setMenuMode(isMenuVisible: boolean, isDeathScreenVisible: boolean) {
     if (!this.isInitialized || !this.backgroundGain || !this.lowPassFilter) return;
     
-    if (isMenuVisible || isDeathScreenVisible) {
-      // Muffle music
-      this.backgroundGain.gain.setTargetAtTime(this.muffledVolume, this.audioContext!.currentTime, 0.3);
-      this.lowPassFilter.frequency.setTargetAtTime(400, this.audioContext!.currentTime, 0.3);
+    const isMuffled = isMenuVisible || isDeathScreenVisible;
+    const targetVolume = this.muted ? 0 : (isMuffled ? this.muffledVolume : this.baseVolume);
+    const targetFreq = isMuffled ? 400 : 20000;
+    
+    // Use immediate transition (0) when muted, otherwise 0.3s for smooth fade
+    const transitionTime = this.muted ? 0 : 0.3;
+    
+    this.backgroundGain.gain.setTargetAtTime(targetVolume, this.audioContext!.currentTime, transitionTime);
+    this.lowPassFilter.frequency.setTargetAtTime(targetFreq, this.audioContext!.currentTime, transitionTime);
+  }
+
+  toggleMute(): boolean {
+    if (!this.isInitialized || !this.backgroundGain) return false;
+    
+    this.muted = !this.muted;
+    
+    if (this.muted) {
+      // Mute - set to 0
+      this.backgroundGain.gain.setTargetAtTime(0, this.audioContext!.currentTime, 0.1);
     } else {
-      // Restore normal music
-      this.backgroundGain.gain.setTargetAtTime(this.baseVolume, this.audioContext!.currentTime, 0.3);
-      this.lowPassFilter.frequency.setTargetAtTime(20000, this.audioContext!.currentTime, 0.3);
+      // Unmute - restore to base volume
+      this.backgroundGain.gain.setTargetAtTime(this.baseVolume, this.audioContext!.currentTime, 0.1);
     }
+    
+    return !this.muted;
+  }
+
+  isMuted(): boolean {
+    return this.muted;
   }
 }
 
@@ -700,9 +696,6 @@ class WebGPURenderer {
 
     if (vertices.length === 0) return;
     
-    // Debug: Log vertex counts by category
-    console.log(`Render: ${this.players.size} players, ${totalSegments} segments, ${this.foods.length} foods, ${vertices.length} vertices`);
-    
     // Prevent vertex buffer overflow
     const maxFloats = this.maxVertices * 5;
     if (vertices.length > maxFloats) {
@@ -801,6 +794,7 @@ class Game {
   private setupEventListeners() {
     document.getElementById('play-btn')?.addEventListener('click', () => this.joinGame());
     document.getElementById('respawn-btn')?.addEventListener('click', () => this.respawn());
+    document.getElementById('speaker-icon')?.addEventListener('click', () => this.toggleMute());
 
     // Keyboard controls
     window.addEventListener('keydown', (e) => this.handleKeyDown(e));
@@ -977,8 +971,6 @@ class Game {
   }
 
   private async connectToServer() {
-    console.log('Connecting to SpacetimeDB WS...');
-    
     const savedToken = localStorage.getItem('snek-token');
     
     this.conn = DbConnection.builder()
@@ -986,7 +978,6 @@ class Game {
       .withDatabaseName(DB_NAME)
       .withToken(savedToken || undefined)
       .onConnect((conn: any, identity: any, token: string) => {
-        console.log('Connected!');
         localStorage.setItem('snek-token', token);
         this.myIdentity = identity.toString();
         this.renderer?.setMyIdentity(this.myIdentity);
@@ -994,12 +985,8 @@ class Game {
         this.setupCallbacks();
         document.getElementById('loading')?.classList.add('hidden');
         
-        // Start background music as soon as connected (on main menu)
-        this.soundManager.startBackgroundMusic();
-        
         conn.subscriptionBuilder()
           .onApplied(() => {
-            console.log('Subscription applied');
           })
           .subscribe([
             tables.player, 
@@ -1014,7 +1001,6 @@ class Game {
           ]);
       })
       .onDisconnect(() => {
-        console.log('Disconnected');
         this.connected = false;
       })
       .build();
@@ -1057,7 +1043,6 @@ class Game {
             this.soundManager.playEatSound();
           }
           this.myScore = newPlayer.score; 
-          document.getElementById('score')!.textContent = newPlayer.score.toString(); 
         }
       }
     });
@@ -1071,18 +1056,12 @@ class Game {
       const id = seg.ownerIdentity.toString();
       if (!this.segments.has(id)) this.segments.set(id, []);
       const segment = seg as unknown as SnakeSegment;
-      console.log(`Segment insert: owner=${id.substring(0,8)}..., segIdx=${seg.segmentIndex}, pos=(${seg.x.toFixed(1)}, ${seg.y.toFixed(1)})`);
       this.segments.get(id)!.push({ 
         segmentIndex: seg.segmentIndex, 
         x: seg.x, 
         y: seg.y, 
         width: segment.width || 14 
       });
-      // Log food at same position to check overlap
-      const matchingFood = this.foods.find(f => Math.abs(f.x - seg.x) < 5 && Math.abs(f.y - seg.y) < 5);
-      if (matchingFood) {
-        console.log(`NEW SEGMENT OVERLAPS FOOD at (${seg.x.toFixed(1)}, ${seg.y.toFixed(1)})!`);
-      }
     });
 
     this.conn.db.snake_segment.onUpdate((ctx, oldSeg, newSeg) => {
@@ -1092,17 +1071,12 @@ class Game {
         const idx = segs.findIndex(s => s.segmentIndex === newSeg.segmentIndex); 
         if (idx >= 0) {
           const segment = newSeg as unknown as SnakeSegment;
-          const oldPos = segs[idx];
           segs[idx] = { 
             segmentIndex: newSeg.segmentIndex, 
             x: newSeg.x, 
             y: newSeg.y, 
             width: segment.width || segs[idx].width 
           };
-          // Debug: Log when head (segment 0) moves
-          if (newSeg.segmentIndex === 0) {
-            console.log(`Head update: (${oldPos.x.toFixed(1)}, ${oldPos.y.toFixed(1)}) -> (${newSeg.x.toFixed(1)}, ${newSeg.y.toFixed(1)})`);
-          }
         }
       }
     });
@@ -1181,7 +1155,6 @@ class Game {
     this.conn.db.food.onDelete((ctx, food) => { 
       const idx = this.foods.findIndex(f => f.id === food.id); 
       if (idx >= 0) {
-        console.log(`Food deleted at (${food.x}, ${food.y}), idx=${idx}, remaining=${this.foods.length - 1}`);
         this.foods.splice(idx, 1); 
       }
     });
@@ -1193,29 +1166,15 @@ class Game {
         player.x = event.x; 
         player.y = event.y; 
         player.direction = event.direction; 
-        // Debug: Log every position update
-        if (event.identity.toString() === this.myIdentity) {
-          console.log(`My position: (${event.x.toFixed(1)}, ${event.y.toFixed(1)}), dir=${event.direction}`);
-        }
       }
     });
 
     this.conn.db.player_died_event.onInsert((ctx, event) => {
       const identity = event.identity.toString();
       if (identity === this.myIdentity) this.showDeathScreen(event.killerName);
-      // Don't delete here - let the gameLoop filter by alive status
-      // The player.onUpdate will set alive=false, then gameLoop will skip rendering
-      // Server will delete the player record and segments on next tick cleanup
-    });
-
-    this.conn.db.player_joined_event.onInsert((ctx, event) => { 
-      console.log(`${event.name} joined!`); 
     });
 
     this.conn.db.bot_died_event.onInsert((ctx, event) => {
-      const botId = event.botId.toString();
-      // Don't delete here - let the gameLoop filter by alive status
-      // The bot.onUpdate will set alive=false, then gameLoop will skip rendering
     });
   }
 
@@ -1224,13 +1183,12 @@ class Game {
     localStorage.setItem('snek-name', name);
     let selectedColor = COLORS[0];
     document.querySelectorAll('.color-option.selected').forEach(el => { selectedColor = (el as any).dataset.color || COLORS[0]; });
-    console.log('Joining game with:', name, selectedColor);
-    console.log('myIdentity:', this.myIdentity);
     document.getElementById('menu')?.classList.add('hidden');
-    document.getElementById('hud')?.classList.remove('hidden');
     document.getElementById('leaderboard')?.classList.remove('hidden');
-    document.getElementById('player-name')!.textContent = name;
     document.getElementById('loading')?.classList.add('hidden');
+
+    // Start background music when user starts playing
+    this.soundManager.startBackgroundMusic();
 
     // Update sound mode for gameplay
     this.soundManager.setMenuMode(false, false);
@@ -1273,10 +1231,20 @@ class Game {
     }
     document.getElementById('death-screen')?.classList.remove('hidden');
     document.getElementById('leaderboard')?.classList.add('hidden');
+    document.getElementById('speaker-icon')?.classList.add('hidden');
     
     // Play death sound and muffle background music
     this.soundManager.playDeathSound();
     this.soundManager.setMenuMode(false, true);
+  }
+
+  private toggleMute() {
+    this.soundManager.toggleMute();
+    // Always sync icon from actual mute state
+    const speakerIcon = document.getElementById('speaker-icon');
+    if (speakerIcon) {
+      speakerIcon.textContent = this.soundManager.isMuted() ? '🔇' : '🔊';
+    }
   }
 
   private updateLeaderboard() {
