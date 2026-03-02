@@ -118,6 +118,53 @@
       flex-direction: column;
       gap: 1.5rem;
       min-width: 320px;
+      max-width: 90vw;
+      width: 100%;
+      box-sizing: border-box;
+    }
+
+    @media (orientation: landscape) and (max-height: 500px) {
+      .title {
+        font-size: 2.5rem;
+        margin-bottom: 0.25rem;
+      }
+      
+      .subtitle {
+        font-size: 0.9rem;
+        margin-bottom: 1rem;
+      }
+      
+      .menu-panel {
+        padding: 1rem 1.5rem;
+        gap: 0.75rem;
+        flex-direction: row;
+        flex-wrap: wrap;
+        justify-content: center;
+        align-items: center;
+        min-width: auto;
+      }
+      
+      .menu-input {
+        padding: 0.5rem 1rem;
+        font-size: 1rem;
+        flex: 1;
+        min-width: 120px;
+      }
+      
+      .color-picker {
+        gap: 0.4rem;
+      }
+      
+      .color-option {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+      }
+      
+      .play-btn {
+        padding: 0.5rem 1.5rem;
+        font-size: 1rem;
+      }
     }
     
     .menu-input {
@@ -219,8 +266,30 @@
       border: 1px solid rgba(255,255,255,0.2);
       min-width: 200px;
       max-width: 280px;
+      max-height: 60vh;
       pointer-events: none;
       z-index: 51;
+      overflow-y: auto;
+    }
+
+    @media (orientation: landscape) {
+      #leaderboard {
+        max-width: 200px;
+        min-width: 150px;
+        font-size: 0.85rem;
+        padding: 0.5rem;
+        max-height: 80vh;
+      }
+      
+      .leaderboard-title {
+        font-size: 0.9rem;
+        margin-bottom: 0.5rem;
+      }
+      
+      .leaderboard-item {
+        padding: 0.2rem 0.3rem;
+        font-size: 0.8rem;
+      }
     }
 
     #leaderboard.hidden {
@@ -320,6 +389,34 @@
       transition: transform 0.2s ease;
     }
 
+    @media (orientation: landscape) {
+      #speaker-icon {
+        top: 0.5rem;
+        top: calc(0.5rem + env(safe-area-inset-top));
+        left: 0.5rem;
+        left: calc(0.5rem + env(safe-area-inset-left));
+        font-size: 1.2rem;
+        padding: 0.35rem 0.5rem;
+      }
+
+      #hud {
+        padding: 0.5rem;
+        padding-top: calc(0.5rem + env(safe-area-inset-top));
+      }
+      
+      .hud-panel {
+        padding: 0.4rem 0.75rem;
+      }
+      
+      .score-display {
+        font-size: 1.2rem;
+      }
+      
+      .name-display {
+        font-size: 0.85rem;
+      }
+    }
+
     #speaker-icon:hover {
       transform: scale(1.1);
     }
@@ -391,6 +488,23 @@
     
     .loading.hidden {
       display: none;
+    }
+
+    @media (orientation: landscape) {
+      .death-title {
+        font-size: 2rem;
+        margin-bottom: 0.5rem;
+      }
+      
+      .death-stats {
+        font-size: 1rem;
+        margin-bottom: 1rem;
+      }
+      
+      .play-btn {
+        padding: 0.75rem 1.5rem;
+        font-size: 1.1rem;
+      }
     }
   </style>
   <script type="module" crossorigin src="/snek-io/assets/index-DXJIvyj5.js"></script>
