@@ -21,4 +21,7 @@ export default __t.row({
   x: __t.f32(),
   y: __t.f32(),
   pendingDirection: __t.f32().name("pending_direction"),
+  isDashing: __t.bool().name("is_dashing"),
+  dashEndTime: __t.u64().name("dash_end_time"),
+  dashCooldownEnd: __t.u64().name("dash_cooldown_end"),
 });

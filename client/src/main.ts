@@ -745,6 +745,7 @@ class Game {
   private lastInputType: 'keyboard' | 'mouse' | 'touch' = 'keyboard';
   private currentDirectionAngle: number = 0;
   private directionUpdateInterval: number | null = null;
+  private lastTapTime: number = 0;
 
   constructor() {
     this.soundManager = new SoundManager();
@@ -813,6 +814,7 @@ class Game {
     canvas.addEventListener('touchmove', (e) => this.handleTouchMove(e), { passive: false });
     canvas.addEventListener('touchend', () => this.handleTouchEnd());
     canvas.addEventListener('touchcancel', () => this.handleTouchEnd());
+    canvas.addEventListener('dblclick', () => this.activateDash());
   }
 
   private resizeCanvas() {
@@ -892,6 +894,13 @@ class Game {
       }
     }
 
+    // Handle dash (space)
+    if (e.code === 'Space') {
+      this.activateDash();
+      e.preventDefault();
+      return;
+    }
+
     // Track movement keys
     const validKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'w', 'a', 's', 'd', 'W', 'A', 'S', 'D'];
     if (validKeys.includes(e.key) || validKeys.includes(e.code)) {
@@ -921,6 +930,14 @@ class Game {
 
   private handleTouchStart(e: TouchEvent) {
     e.preventDefault();
+    
+    // Check for double-tap (within 300ms)
+    const now = Date.now();
+    if (now - this.lastTapTime < 300) {
+      this.activateDash();
+    }
+    this.lastTapTime = now;
+    
     if (e.touches.length > 0) {
       const touch = e.touches[0];
       this.mouseX = touch.clientX;
@@ -978,6 +995,10 @@ class Game {
       this.currentDirectionAngle = newAngle;
       this.conn?.reducers.changeDirection({ direction: newAngle });
     }
+  }
+
+  private activateDash() {
+    this.conn?.reducers.activateDash({});
   }
 
   private async connectToServer() {

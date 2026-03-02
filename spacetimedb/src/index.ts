@@ -230,6 +230,9 @@ const Player = table(
     x: t.f32(),
     y: t.f32(),
     pending_direction: t.f32(),
+    is_dashing: t.bool().default(false),
+    dash_end_time: t.u64().default(0n),
+    dash_cooldown_end: t.u64().default(0n),
   }
 );
 
@@ -258,6 +261,9 @@ const Bot = table(
     x: t.f32(),
     y: t.f32(),
     pending_direction: t.f32(),
+    is_dashing: t.bool().default(false),
+    dash_end_time: t.u64().default(0n),
+    dash_cooldown_end: t.u64().default(0n),
   }
 );
 
@@ -367,6 +373,9 @@ export const join_game = spacetimedb.reducer(
       x: pos.x,
       y: pos.y,
       pending_direction: dir,
+      is_dashing: false,
+      dash_end_time: 0n,
+      dash_cooldown_end: 0n,
     });
 
     for (let i = 0; i < INITIAL_SNAKE_LENGTH; i++) {
@@ -416,6 +425,38 @@ export const change_direction = spacetimedb.reducer(
   }
 );
 
+const DASH_DURATION_MS = 500n;
+const DASH_COOLDOWN_MS = 2500n;
+const DASH_MULTIPLIER = 3;
+
+export const activateDash = spacetimedb.reducer(
+  (ctx: any) => {
+    const sender = ctx.sender;
+    const player = ctx.db.player.identity.find(sender);
+
+    if (!player || !player.alive) {
+      return;
+    }
+
+    const now = BigInt(Date.now());
+
+    if (player.is_dashing) {
+      return;
+    }
+
+    if (now < player.dash_cooldown_end) {
+      return;
+    }
+
+    ctx.db.player.identity.update({
+      ...player,
+      is_dashing: true,
+      dash_end_time: now + DASH_DURATION_MS,
+      dash_cooldown_end: now + DASH_DURATION_MS + DASH_COOLDOWN_MS,
+    });
+  }
+);
+
 // Normalize angle to [-π, π]
 function normalizeAngle(angle: number): number {
   while (angle > Math.PI) angle -= 2 * Math.PI;
@@ -453,6 +494,9 @@ function spawnBot(ctx: any) {
     x: pos.x,
     y: pos.y,
     pending_direction: dir,
+    is_dashing: false,
+    dash_end_time: 0n,
+    dash_cooldown_end: 0n,
   });
 
   for (let i = 0; i < INITIAL_SNAKE_LENGTH; i++) {
@@ -478,6 +522,7 @@ tickReducer = spacetimedb.reducer(
     const foods = [...ctx.db.food.iter()];
     const players = [...ctx.db.player.iter()].filter((p: any) => p.alive);
     const bots = [...ctx.db.bot.iter()].filter((b: any) => b.alive);
+    const now = BigInt(Date.now());
     
     // Move players
     for (const player of players) {
@@ -491,9 +536,19 @@ tickReducer = spacetimedb.reducer(
         newDir = currentDir;
       }
 
+      // Check and update dash state
+      let currentSpeed = MOVE_SPEED;
+      if (player.is_dashing) {
+        if (now >= player.dash_end_time) {
+          ctx.db.player.identity.update({ ...player, is_dashing: false });
+        } else {
+          currentSpeed = MOVE_SPEED * DASH_MULTIPLIER;
+        }
+      }
+
       // Calculate movement using angle in radians
-      const dx = Math.cos(newDir) * MOVE_SPEED;
-      const dy = Math.sin(newDir) * MOVE_SPEED;
+      const dx = Math.cos(newDir) * currentSpeed;
+      const dy = Math.sin(newDir) * currentSpeed;
 
       let newX = player.x + dx;
       let newY = player.y + dy;
@@ -510,7 +565,7 @@ tickReducer = spacetimedb.reducer(
       // Collision radius grows with head size to match visual representation
       // Head width grows by 0.08 per food eaten, base width is 18
       const headWidth = headSegment ? Number(headSegment.width) : 18;
-      const headCollisionRadius = headWidth * 0.6; // Scale with head width to match visual size
+      const headCollisionRadius = headWidth * 0.8;
       let ateFood = false;
       let foodIndex = -1;
       for (let i = 0; i < foods.length; i++) {
@@ -811,9 +866,32 @@ tickReducer = spacetimedb.reducer(
 
       bot.pending_direction = newDir;
 
+      // Bot AI dash logic: randomly dash when cooldown is ready
+      if (!bot.is_dashing && now >= bot.dash_cooldown_end && ctx.random() < 0.15) {
+        ctx.db.bot.id.update({
+          ...bot,
+          is_dashing: true,
+          dash_end_time: now + DASH_DURATION_MS,
+          dash_cooldown_end: now + DASH_DURATION_MS + DASH_COOLDOWN_MS,
+        });
+        bot.is_dashing = true;
+        bot.dash_end_time = now + DASH_DURATION_MS;
+        bot.dash_cooldown_end = now + DASH_DURATION_MS + DASH_COOLDOWN_MS;
+      }
+
+      // Check and update dash state
+      let currentSpeed = MOVE_SPEED;
+      if (bot.is_dashing) {
+        if (now >= bot.dash_end_time) {
+          ctx.db.bot.id.update({ ...bot, is_dashing: false });
+        } else {
+          currentSpeed = MOVE_SPEED * DASH_MULTIPLIER;
+        }
+      }
+
       // Calculate movement using angle in radians
-      const dx = Math.cos(newDir) * MOVE_SPEED;
-      const dy = Math.sin(newDir) * MOVE_SPEED;
+      const dx = Math.cos(newDir) * currentSpeed;
+      const dy = Math.sin(newDir) * currentSpeed;
 
       let newX = bot.x + dx;
       let newY = bot.y + dy;

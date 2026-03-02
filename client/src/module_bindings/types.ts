@@ -21,6 +21,9 @@ export const Bot = __t.object("Bot", {
   x: __t.f32(),
   y: __t.f32(),
   pendingDirection: __t.f32(),
+  isDashing: __t.bool(),
+  dashEndTime: __t.u64(),
+  dashCooldownEnd: __t.u64(),
 });
 export type Bot = __Infer<typeof Bot>;
 
@@ -65,6 +68,9 @@ export const Player = __t.object("Player", {
   x: __t.f32(),
   y: __t.f32(),
   pendingDirection: __t.f32(),
+  isDashing: __t.bool(),
+  dashEndTime: __t.u64(),
+  dashCooldownEnd: __t.u64(),
 });
 export type Player = __Infer<typeof Player>;
 

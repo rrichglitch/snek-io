@@ -34,6 +34,7 @@ import {
 } from "spacetimedb";
 
 // Import all reducer arg schemas
+import ActivateDashReducer from "./activate_dash_reducer";
 import ChangeDirectionReducer from "./change_direction_reducer";
 import JoinGameReducer from "./join_game_reducer";
 import LeaveGameReducer from "./leave_game_reducer";
@@ -146,6 +147,7 @@ const tablesSchema = __schema({
 
 /** The schema information for all reducers in this module. This is defined the same way as the reducers would have been defined in the server, except the body of the reducer is omitted in code generation. */
 const reducersSchema = __reducers(
+  __reducerSchema("activate_dash", ActivateDashReducer),
   __reducerSchema("change_direction", ChangeDirectionReducer),
   __reducerSchema("join_game", JoinGameReducer),
   __reducerSchema("leave_game", LeaveGameReducer),

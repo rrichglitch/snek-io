@@ -6,10 +6,12 @@
 import { type Infer as __Infer } from "spacetimedb";
 
 // Import all reducer arg schemas
+import ActivateDashReducer from "../activate_dash_reducer";
 import ChangeDirectionReducer from "../change_direction_reducer";
 import JoinGameReducer from "../join_game_reducer";
 import LeaveGameReducer from "../leave_game_reducer";
 
+export type ActivateDashParams = __Infer<typeof ActivateDashReducer>;
 export type ChangeDirectionParams = __Infer<typeof ChangeDirectionReducer>;
 export type JoinGameParams = __Infer<typeof JoinGameReducer>;
 export type LeaveGameParams = __Infer<typeof LeaveGameReducer>;
