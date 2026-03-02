@@ -442,7 +442,10 @@ export const activateDash = spacetimedb.reducer(
       return;
     }
 
-    const now = BigInt(ctx.timestamp);
+    const now = BigInt(Date.now());
+    if (now < player.dash_cooldown_end) {
+      return;
+    }
 
     ctx.db.player.identity.update({
       ...player,
@@ -518,7 +521,7 @@ tickReducer = spacetimedb.reducer(
     const foods = [...ctx.db.food.iter()];
     const players = [...ctx.db.player.iter()].filter((p: any) => p.alive);
     const bots = [...ctx.db.bot.iter()].filter((b: any) => b.alive);
-    const now = BigInt(ctx.timestamp);
+    const now = BigInt(Date.now());
     
     // Move players
     for (const player of players) {
@@ -534,12 +537,13 @@ tickReducer = spacetimedb.reducer(
 
       // Check and update dash state
       let currentSpeed = MOVE_SPEED;
-      if (player.is_dashing) {
-        if (now >= player.dash_end_time) {
-          ctx.db.player.identity.update({ ...player, is_dashing: false, dash_cooldown_end: 0n });
-        } else {
-          currentSpeed = MOVE_SPEED * DASH_MULTIPLIER;
-        }
+      let isDashing = player.is_dashing;
+      let newCooldownEnd = player.dash_cooldown_end;
+      if (player.is_dashing && now >= player.dash_end_time) {
+        isDashing = false;
+        newCooldownEnd = now + DASH_COOLDOWN_MS;
+      } else if (player.is_dashing) {
+        currentSpeed = MOVE_SPEED * DASH_MULTIPLIER;
       }
 
       // Calculate movement using angle in radians
@@ -843,6 +847,8 @@ tickReducer = spacetimedb.reducer(
           x: newX,
           y: newY,
           direction: newDir,
+          is_dashing: isDashing,
+          dash_cooldown_end: newCooldownEnd,
         });
       }
     }
@@ -870,19 +876,17 @@ tickReducer = spacetimedb.reducer(
           dash_end_time: now + DASH_DURATION_MS,
           dash_cooldown_end: now + DASH_DURATION_MS + DASH_COOLDOWN_MS,
         });
-        bot.is_dashing = true;
-        bot.dash_end_time = now + DASH_DURATION_MS;
-        bot.dash_cooldown_end = now + DASH_DURATION_MS + DASH_COOLDOWN_MS;
       }
 
       // Check and update dash state
       let currentSpeed = MOVE_SPEED;
-      if (bot.is_dashing) {
-        if (now >= bot.dash_end_time) {
-          ctx.db.bot.id.update({ ...bot, is_dashing: false, dash_cooldown_end: 0n });
-        } else {
-          currentSpeed = MOVE_SPEED * DASH_MULTIPLIER;
-        }
+      let botIsDashing = bot.is_dashing;
+      let botNewCooldownEnd = bot.dash_cooldown_end;
+      if (bot.is_dashing && now >= bot.dash_end_time) {
+        botIsDashing = false;
+        botNewCooldownEnd = now + DASH_COOLDOWN_MS;
+      } else if (bot.is_dashing) {
+        currentSpeed = MOVE_SPEED * DASH_MULTIPLIER;
       }
 
       // Calculate movement using angle in radians
@@ -1059,6 +1063,8 @@ tickReducer = spacetimedb.reducer(
           x: newX,
           y: newY,
           direction: newDir,
+          is_dashing: botIsDashing,
+          dash_cooldown_end: botNewCooldownEnd,
         });
       }
     }
