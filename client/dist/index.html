@@ -2,7 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="screen-orientation" content="portrait">
   <title>snek.io</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -18,14 +22,21 @@
       font-family: 'Nunito', sans-serif;
       background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
       min-height: 100vh;
+      min-height: 100dvh;
       overflow: hidden;
       color: white;
+      position: fixed;
+      width: 100%;
+      height: 100%;
     }
     
     #app {
       width: 100vw;
+      width: 100dvw;
       height: 100vh;
+      height: 100dvh;
       position: relative;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
     }
     
     #gameCanvas {
@@ -52,6 +63,7 @@
     .game-credit {
       position: absolute;
       bottom: 20px;
+      bottom: calc(20px + env(safe-area-inset-bottom));
       font-size: 0.9rem;
       color: rgba(255, 255, 255, 0.5);
       font-weight: 400;
@@ -183,9 +195,11 @@
     #hud {
       position: absolute;
       top: 0;
+      top: env(safe-area-inset-top);
       left: 0;
       width: 100%;
       padding: 1rem;
+      padding-top: calc(1rem + env(safe-area-inset-top));
       display: flex;
       justify-content: space-between;
       pointer-events: none;
@@ -195,7 +209,9 @@
     #leaderboard {
       position: absolute;
       top: 1rem;
+      top: calc(1rem + env(safe-area-inset-top));
       right: 1rem;
+      right: calc(1rem + env(safe-area-inset-right));
       background: rgba(0,0,0,0.7);
       backdrop-filter: blur(10px);
       border-radius: 12px;
@@ -289,7 +305,9 @@
     #speaker-icon {
       position: absolute;
       top: 1rem;
+      top: calc(1rem + env(safe-area-inset-top));
       left: 1rem;
+      left: calc(1rem + env(safe-area-inset-left));
       font-size: 1.5rem;
       cursor: pointer;
       z-index: 200;
@@ -375,7 +393,7 @@
       display: none;
     }
   </style>
-  <script type="module" crossorigin src="/snek-io/assets/index-Vd0OSZ8C.js"></script>
+  <script type="module" crossorigin src="/snek-io/assets/index-DXJIvyj5.js"></script>
 </head>
 <body>
   <div id="app">

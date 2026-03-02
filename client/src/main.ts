@@ -764,6 +764,9 @@ class Game {
     this.setupEventListeners();
     this.resizeCanvas();
     window.addEventListener('resize', () => this.resizeCanvas());
+    window.addEventListener('orientationchange', () => {
+      setTimeout(() => this.resizeCanvas(), 100);
+    });
 
     await this.connectToServer();
     
@@ -817,6 +820,13 @@ class Game {
     canvas.width = window.innerWidth;
     canvas.height = window.innerHeight;
     this.renderer?.resize(window.innerWidth, window.innerHeight);
+    
+    // Force portrait orientation hint on mobile
+    if (screen.orientation && 'lock' in screen.orientation) {
+      (screen.orientation.lock as (type: string) => Promise<void>)('portrait').catch(() => {
+        // Lock not supported or denied - that's okay
+      });
+    }
   }
 
   private selectedColorIndex: number = Math.floor(Math.random() * COLORS.length);
