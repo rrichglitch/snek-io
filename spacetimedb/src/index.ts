@@ -438,15 +438,11 @@ export const activateDash = spacetimedb.reducer(
       return;
     }
 
-    const now = BigInt(Date.now());
-
     if (player.is_dashing) {
       return;
     }
 
-    if (now < player.dash_cooldown_end) {
-      return;
-    }
+    const now = BigInt(ctx.timestamp);
 
     ctx.db.player.identity.update({
       ...player,
@@ -522,7 +518,7 @@ tickReducer = spacetimedb.reducer(
     const foods = [...ctx.db.food.iter()];
     const players = [...ctx.db.player.iter()].filter((p: any) => p.alive);
     const bots = [...ctx.db.bot.iter()].filter((b: any) => b.alive);
-    const now = BigInt(Date.now());
+    const now = BigInt(ctx.timestamp);
     
     // Move players
     for (const player of players) {
@@ -540,7 +536,7 @@ tickReducer = spacetimedb.reducer(
       let currentSpeed = MOVE_SPEED;
       if (player.is_dashing) {
         if (now >= player.dash_end_time) {
-          ctx.db.player.identity.update({ ...player, is_dashing: false });
+          ctx.db.player.identity.update({ ...player, is_dashing: false, dash_cooldown_end: 0n });
         } else {
           currentSpeed = MOVE_SPEED * DASH_MULTIPLIER;
         }
@@ -883,7 +879,7 @@ tickReducer = spacetimedb.reducer(
       let currentSpeed = MOVE_SPEED;
       if (bot.is_dashing) {
         if (now >= bot.dash_end_time) {
-          ctx.db.bot.id.update({ ...bot, is_dashing: false });
+          ctx.db.bot.id.update({ ...bot, is_dashing: false, dash_cooldown_end: 0n });
         } else {
           currentSpeed = MOVE_SPEED * DASH_MULTIPLIER;
         }

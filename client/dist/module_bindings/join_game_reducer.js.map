@@ -1,0 +1,1 @@
+{"version":3,"file":"join_game_reducer.js","sourceRoot":"","sources":["../../src/module_bindings/join_game_reducer.ts"],"names":[],"mappings":"AAAA,0EAA0E;AAC1E,uEAAuE;AAEvE,oBAAoB;AACpB,oBAAoB;AACpB,OAAO,EAEL,CAAC,IAAI,GAAG,GAGT,MAAM,aAAa,CAAC;AAErB,eAAe;IACb,IAAI,EAAE,GAAG,CAAC,MAAM,EAAE;IAClB,KAAK,EAAE,GAAG,CAAC,MAAM,EAAE;CACpB,CAAC"}
