@@ -16,11 +16,11 @@ export const Bot = __t.object("Bot", {
   color: __t.string(),
   score: __t.u32(),
   length: __t.u32(),
-  direction: __t.u8(),
+  direction: __t.f32(),
   alive: __t.bool(),
   x: __t.f32(),
   y: __t.f32(),
-  pendingDirection: __t.u8(),
+  pendingDirection: __t.f32(),
 });
 export type Bot = __Infer<typeof Bot>;
 
@@ -60,11 +60,11 @@ export const Player = __t.object("Player", {
   color: __t.string(),
   score: __t.u32(),
   length: __t.u32(),
-  direction: __t.u8(),
+  direction: __t.f32(),
   alive: __t.bool(),
   x: __t.f32(),
   y: __t.f32(),
-  pendingDirection: __t.u8(),
+  pendingDirection: __t.f32(),
 });
 export type Player = __Infer<typeof Player>;
 
@@ -87,7 +87,7 @@ export const PlayerPositionEvent = __t.object("PlayerPositionEvent", {
   identity: __t.identity(),
   x: __t.f32(),
   y: __t.f32(),
-  direction: __t.u8(),
+  direction: __t.f32(),
 });
 export type PlayerPositionEvent = __Infer<typeof PlayerPositionEvent>;
 

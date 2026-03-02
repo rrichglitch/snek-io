@@ -37,7 +37,6 @@ import {
 import ChangeDirectionReducer from "./change_direction_reducer";
 import JoinGameReducer from "./join_game_reducer";
 import LeaveGameReducer from "./leave_game_reducer";
-import SpawnFoodReducer from "./spawn_food_reducer";
 
 // Import all procedure arg schemas
 
@@ -150,7 +149,6 @@ const reducersSchema = __reducers(
   __reducerSchema("change_direction", ChangeDirectionReducer),
   __reducerSchema("join_game", JoinGameReducer),
   __reducerSchema("leave_game", LeaveGameReducer),
-  __reducerSchema("spawn_food", SpawnFoodReducer),
 );
 
 /** The schema information for all procedures in this module. This is defined the same way as the procedures would have been defined in the server. */

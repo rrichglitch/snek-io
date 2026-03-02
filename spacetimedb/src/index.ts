@@ -9,13 +9,6 @@ const SEGMENT_SPACING = 18;
 const TICK_INTERVAL_US = 50000n;
 const MIN_SNAKES = 10; // Minimum total snakes (players + bots)
 
-const DIRECTIONS = {
-  UP: 0,
-  RIGHT: 1,
-  DOWN: 2,
-  LEFT: 3,
-};
-
 const COLORS = [
   '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
   '#DDA0DD', '#98D8C8', '#F7DC6F', '#FFB347',
@@ -105,10 +98,10 @@ function chooseBotDirection(ctx: any, bot: any, foods: any[], players: any[], bo
   const headX = bot.x;
   const headY = bot.y;
   const currentDir = bot.direction;
-  
+
   // Get bot's own segments for self-collision checking
   const ownSegments = getBotSegments(ctx, bot.id);
-  
+
   // Find nearest food
   let nearestFood = null;
   let nearestFoodDist = Infinity;
@@ -119,50 +112,20 @@ function chooseBotDirection(ctx: any, bot: any, foods: any[], players: any[], bo
       nearestFood = food;
     }
   }
-  
-  // Calculate desired direction toward food
+
+  // Calculate desired direction toward food as angle
   let desiredDir = currentDir;
   if (nearestFood) {
     const dx = nearestFood.x - headX;
     const dy = nearestFood.y - headY;
-    
-    // Choose primary direction based on larger difference
-    if (Math.abs(dx) > Math.abs(dy)) {
-      desiredDir = dx > 0 ? DIRECTIONS.RIGHT : DIRECTIONS.LEFT;
-    } else {
-      desiredDir = dy > 0 ? DIRECTIONS.DOWN : DIRECTIONS.UP;
-    }
+    desiredDir = Math.atan2(dy, dx);
   }
-  
-  // Check if desired direction is valid (not 180-degree turn)
-  const isValidDir = (dir: number) => {
-    if (dir === currentDir) return true;
-    if ((currentDir === 0 && dir === 2) ||
-        (currentDir === 1 && dir === 3) ||
-        (currentDir === 2 && dir === 0) ||
-        (currentDir === 3 && dir === 1)) {
-      return false;
-    }
-    return true;
-  };
-  
-  // Check for collisions/obstacles in a direction
-  const checkCollision = (dir: number) => {
-    let checkX = headX;
-    let checkY = headY;
-    switch (dir) {
-      case DIRECTIONS.UP: checkY -= MOVE_SPEED * 3; break;
-      case DIRECTIONS.RIGHT: checkX += MOVE_SPEED * 3; break;
-      case DIRECTIONS.DOWN: checkY += MOVE_SPEED * 3; break;
-      case DIRECTIONS.LEFT: checkX -= MOVE_SPEED * 3; break;
-    }
-    
-    // Wrap coordinates
-    if (checkX < 0) checkX += MAP_SIZE;
-    if (checkX >= MAP_SIZE) checkX -= MAP_SIZE;
-    if (checkY < 0) checkY += MAP_SIZE;
-    if (checkY >= MAP_SIZE) checkY -= MAP_SIZE;
-    
+
+  // Check for collisions at a given angle
+  const checkCollision = (angle: number, distance: number = MOVE_SPEED * 3) => {
+    const checkX = headX + Math.cos(angle) * distance;
+    const checkY = headY + Math.sin(angle) * distance;
+
     // Check distance to other snakes (players and bots)
     const checkDistance = (segments: any[], skipFirstN: number = 0) => {
       for (const seg of segments) {
@@ -172,14 +135,14 @@ function chooseBotDirection(ctx: any, bot: any, foods: any[], players: any[], bo
       }
       return false;
     };
-    
+
     // Check self-collision (skip first 4 segments: head + neck)
     if (ownSegments.length > 4) {
       if (checkDistance(ownSegments, 4)) {
         return true;
       }
     }
-    
+
     // Check all player segments
     for (const player of players) {
       if (player.alive) {
@@ -187,7 +150,7 @@ function chooseBotDirection(ctx: any, bot: any, foods: any[], players: any[], bo
         if (checkDistance(segments, 1)) return true;
       }
     }
-    
+
     // Check all bot segments
     for (const otherBot of bots) {
       if (otherBot.id !== bot.id && otherBot.alive) {
@@ -195,56 +158,57 @@ function chooseBotDirection(ctx: any, bot: any, foods: any[], players: any[], bo
         if (checkDistance(segments, 1)) return true;
       }
     }
-    
+
     return false;
   };
-  
+
   // Try desired direction first
-  if (isValidDir(desiredDir) && !checkCollision(desiredDir)) {
+  if (!checkCollision(desiredDir)) {
     return desiredDir;
   }
-  
-  // Try other directions in order of preference, prioritizing directions that don't turn too sharply
-  const directions = [DIRECTIONS.UP, DIRECTIONS.RIGHT, DIRECTIONS.DOWN, DIRECTIONS.LEFT];
-  
-  // First, try directions that continue straight or turn 90 degrees
-  for (const dir of directions) {
-    if (isValidDir(dir) && !checkCollision(dir)) {
-      return dir;
+
+  // Try angles at 45-degree increments from desired direction
+  const angleOffsets = [Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2, 3 * Math.PI / 4, -3 * Math.PI / 4, Math.PI];
+
+  for (const offset of angleOffsets) {
+    const testAngle = desiredDir + offset;
+    if (!checkCollision(testAngle)) {
+      return testAngle;
     }
   }
-  
-  // If all directions have obstacles, check if continuing straight is better than turning into danger
-  // Look further ahead in current direction to see if it's safe
-  let checkX = headX;
-  let checkY = headY;
-  for (let steps = 1; steps <= 5; steps++) {
-    switch (currentDir) {
-      case DIRECTIONS.UP: checkY -= MOVE_SPEED; break;
-      case DIRECTIONS.RIGHT: checkX += MOVE_SPEED; break;
-      case DIRECTIONS.DOWN: checkY += MOVE_SPEED; break;
-      case DIRECTIONS.LEFT: checkX -= MOVE_SPEED; break;
-    }
-    
+
+  // If all directions have obstacles, look further ahead in current direction
+  // to see if we can continue straight
+  let collisionDistance = Infinity;
+  for (let dist = 1; dist <= 5; dist++) {
+    const testX = headX + Math.cos(currentDir) * dist * MOVE_SPEED;
+    const testY = headY + Math.sin(currentDir) * dist * MOVE_SPEED;
+
     // Check self-collision at this projected position
     if (ownSegments.length > 4) {
       for (let i = 4; i < ownSegments.length; i++) {
         const seg = ownSegments[i];
-        const dist = Math.sqrt(Math.pow(seg.x - checkX, 2) + Math.pow(seg.y - checkY, 2));
-        if (dist < 25) {
-          // Collision imminent! Try to find an escape direction
-          for (const dir of directions) {
-            if (isValidDir(dir)) {
-              return dir;
-            }
-          }
-          return currentDir;
+        const distToSeg = Math.sqrt(Math.pow(seg.x - testX, 2) + Math.pow(seg.y - testY, 2));
+        if (distToSeg < 25) {
+          collisionDistance = dist;
+          break;
         }
       }
     }
+    if (collisionDistance < Infinity) break;
   }
-  
-  // If all directions have obstacles but straight seems clear for now, continue straight
+
+  // If collision imminent, pick any available escape angle
+  if (collisionDistance <= 3) {
+    for (let i = 0; i < 8; i++) {
+      const escapeAngle = (i / 8) * Math.PI * 2;
+      if (!checkCollision(escapeAngle)) {
+        return escapeAngle;
+      }
+    }
+  }
+
+  // Continue in current direction
   return currentDir;
 }
 
@@ -256,11 +220,11 @@ const Player = table(
     color: t.string(),
     score: t.u32(),
     length: t.u32(),
-    direction: t.u8(),
+    direction: t.f32(),
     alive: t.bool(),
     x: t.f32(),
     y: t.f32(),
-    pending_direction: t.u8(),
+    pending_direction: t.f32(),
   }
 );
 
@@ -284,11 +248,11 @@ const Bot = table(
     color: t.string(),
     score: t.u32(),
     length: t.u32(),
-    direction: t.u8(),
+    direction: t.f32(),
     alive: t.bool(),
     x: t.f32(),
     y: t.f32(),
-    pending_direction: t.u8(),
+    pending_direction: t.f32(),
   }
 );
 
@@ -320,7 +284,7 @@ const PlayerPositionEvent = table(
     identity: t.identity(),
     x: t.f32(),
     y: t.f32(),
-    direction: t.u8(),
+    direction: t.f32(),
   }
 );
 
@@ -385,7 +349,7 @@ export const join_game = spacetimedb.reducer(
     }
 
     const pos = getRandomPosition(ctx);
-    const dir = Math.floor(ctx.random() * 4) as 0 | 1 | 2 | 3;
+    const dir = ctx.random() * Math.PI * 2; // Random angle in radians
 
     ctx.db.player.insert({
       identity: sender,
@@ -401,12 +365,15 @@ export const join_game = spacetimedb.reducer(
     });
 
     for (let i = 0; i < INITIAL_SNAKE_LENGTH; i++) {
+      // Calculate offset using angle (opposite direction)
+      const offsetX = -Math.cos(dir) * i * SEGMENT_SPACING;
+      const offsetY = -Math.sin(dir) * i * SEGMENT_SPACING;
       ctx.db.snake_segment.insert({
         id: 0n,
         owner_identity: sender,
         segment_index: i,
-        x: pos.x - i * SEGMENT_SPACING * (dir === 1 ? 1 : dir === 3 ? -1 : 0),
-        y: pos.y - i * SEGMENT_SPACING * (dir === 0 ? -1 : dir === 2 ? 1 : 0),
+        x: pos.x + offsetX,
+        y: pos.y + offsetY,
         width: 18.0,
       });
     }
@@ -422,21 +389,12 @@ export const join_game = spacetimedb.reducer(
 );
 
 export const change_direction = spacetimedb.reducer(
-  { direction: t.u8() },
+  { direction: t.f32() },
   (ctx: any, { direction }: { direction: number }) => {
     const sender = ctx.sender;
     const player = ctx.db.player.identity.find(sender);
-    
-    if (!player || !player.alive) {
-      return;
-    }
 
-    const currentDir = player.pending_direction;
-    if (direction === currentDir) return;
-    if ((currentDir === 0 && direction === 2) ||
-        (currentDir === 1 && direction === 3) ||
-        (currentDir === 2 && direction === 0) ||
-        (currentDir === 3 && direction === 1)) {
+    if (!player || !player.alive) {
       return;
     }
 
@@ -460,7 +418,7 @@ export const leave_game = spacetimedb.reducer(
 // Spawn a bot snake
 function spawnBot(ctx: any) {
   const pos = getRandomPosition(ctx);
-  const dir = Math.floor(ctx.random() * 4) as 0 | 1 | 2 | 3;
+  const dir = ctx.random() * Math.PI * 2; // Random angle in radians
   const name = BOT_NAMES[Math.floor(ctx.random() * BOT_NAMES.length)];
   const color = getRandomColor(ctx);
 
@@ -478,12 +436,15 @@ function spawnBot(ctx: any) {
   });
 
   for (let i = 0; i < INITIAL_SNAKE_LENGTH; i++) {
+    // Calculate offset using angle (opposite direction)
+    const offsetX = -Math.cos(dir) * i * SEGMENT_SPACING;
+    const offsetY = -Math.sin(dir) * i * SEGMENT_SPACING;
     ctx.db.bot_segment.insert({
       id: 0n,
       bot_id: bot.id,
       segment_index: i,
-      x: pos.x - i * SEGMENT_SPACING * (dir === 1 ? 1 : dir === 3 ? -1 : 0),
-      y: pos.y - i * SEGMENT_SPACING * (dir === 0 ? -1 : dir === 2 ? 1 : 0),
+      x: pos.x + offsetX,
+      y: pos.y + offsetY,
       width: 14.0,
     });
   }
@@ -502,13 +463,9 @@ tickReducer = spacetimedb.reducer(
     for (const player of players) {
       const newDir = player.pending_direction;
 
-      let dx = 0, dy = 0;
-      switch (newDir) {
-        case DIRECTIONS.UP: dy = -MOVE_SPEED; break;
-        case DIRECTIONS.RIGHT: dx = MOVE_SPEED; break;
-        case DIRECTIONS.DOWN: dy = MOVE_SPEED; break;
-        case DIRECTIONS.LEFT: dx = -MOVE_SPEED; break;
-      }
+      // Calculate movement using angle in radians
+      const dx = Math.cos(newDir) * MOVE_SPEED;
+      const dy = Math.sin(newDir) * MOVE_SPEED;
 
       let newX = player.x + dx;
       let newY = player.y + dy;
@@ -797,13 +754,9 @@ tickReducer = spacetimedb.reducer(
       const newDir = chooseBotDirection(ctx, bot, foods, players, bots);
       bot.pending_direction = newDir;
 
-      let dx = 0, dy = 0;
-      switch (newDir) {
-        case DIRECTIONS.UP: dy = -MOVE_SPEED; break;
-        case DIRECTIONS.RIGHT: dx = MOVE_SPEED; break;
-        case DIRECTIONS.DOWN: dy = MOVE_SPEED; break;
-        case DIRECTIONS.LEFT: dx = -MOVE_SPEED; break;
-      }
+      // Calculate movement using angle in radians
+      const dx = Math.cos(newDir) * MOVE_SPEED;
+      const dy = Math.sin(newDir) * MOVE_SPEED;
 
       let newX = bot.x + dx;
       let newY = bot.y + dy;

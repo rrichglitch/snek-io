@@ -14,5 +14,5 @@ export default __t.row({
   identity: __t.identity(),
   x: __t.f32(),
   y: __t.f32(),
-  direction: __t.u8(),
+  direction: __t.f32(),
 });

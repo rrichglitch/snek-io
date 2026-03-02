@@ -16,9 +16,9 @@ export default __t.row({
   color: __t.string(),
   score: __t.u32(),
   length: __t.u32(),
-  direction: __t.u8(),
+  direction: __t.f32(),
   alive: __t.bool(),
   x: __t.f32(),
   y: __t.f32(),
-  pendingDirection: __t.u8().name("pending_direction"),
+  pendingDirection: __t.f32().name("pending_direction"),
 });

@@ -9,10 +9,8 @@ import { type Infer as __Infer } from "spacetimedb";
 import ChangeDirectionReducer from "../change_direction_reducer";
 import JoinGameReducer from "../join_game_reducer";
 import LeaveGameReducer from "../leave_game_reducer";
-import SpawnFoodReducer from "../spawn_food_reducer";
 
 export type ChangeDirectionParams = __Infer<typeof ChangeDirectionReducer>;
 export type JoinGameParams = __Infer<typeof JoinGameReducer>;
 export type LeaveGameParams = __Infer<typeof LeaveGameReducer>;
-export type SpawnFoodParams = __Infer<typeof SpawnFoodReducer>;
 

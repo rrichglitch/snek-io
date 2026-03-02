@@ -11,5 +11,5 @@ import {
 } from "spacetimedb";
 
 export default {
-  direction: __t.u8(),
+  direction: __t.f32(),
 };

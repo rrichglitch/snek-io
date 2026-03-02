@@ -691,6 +691,14 @@ class Game {
   private connected: boolean = false;
   private leaderboardUpdateCounter: number = 0;
 
+  // Input state for 360-degree movement
+  private pressedKeys: Set<string> = new Set();
+  private mouseX: number = 0;
+  private mouseY: number = 0;
+  private lastInputType: 'keyboard' | 'mouse' | 'touch' = 'keyboard';
+  private currentDirectionAngle: number = 0;
+  private directionUpdateInterval: number | null = null;
+
   constructor() {
     this.soundManager = new SoundManager();
   }
@@ -741,7 +749,21 @@ class Game {
   private setupEventListeners() {
     document.getElementById('play-btn')?.addEventListener('click', () => this.joinGame());
     document.getElementById('respawn-btn')?.addEventListener('click', () => this.respawn());
-    window.addEventListener('keydown', (e) => this.handleInput(e));
+
+    // Keyboard controls
+    window.addEventListener('keydown', (e) => this.handleKeyDown(e));
+    window.addEventListener('keyup', (e) => this.handleKeyUp(e));
+    window.addEventListener('blur', () => this.handleWindowBlur());
+
+    // Mouse controls
+    window.addEventListener('mousemove', (e) => this.handleMouseMove(e));
+
+    // Touch controls
+    const canvas = document.getElementById('gameCanvas') as HTMLCanvasElement;
+    canvas.addEventListener('touchstart', (e) => this.handleTouchStart(e), { passive: false });
+    canvas.addEventListener('touchmove', (e) => this.handleTouchMove(e), { passive: false });
+    canvas.addEventListener('touchend', () => this.handleTouchEnd());
+    canvas.addEventListener('touchcancel', () => this.handleTouchEnd());
   }
 
   private resizeCanvas() {
@@ -751,38 +773,108 @@ class Game {
     this.renderer?.resize(window.innerWidth, window.innerHeight);
   }
 
-  private handleInput(e: KeyboardEvent) {
-    console.log('Key pressed:', e.key, e.code);
-    
+  private handleKeyDown(e: KeyboardEvent) {
     // Handle Enter key for play/respawn
     if (e.key === 'Enter') {
       const menu = document.getElementById('menu');
       const deathScreen = document.getElementById('death-screen');
-      
-      // If menu is visible, join game
+
       if (menu && !menu.classList.contains('hidden')) {
         this.joinGame();
         return;
       }
-      
-      // If death screen is visible, respawn
+
       if (deathScreen && !deathScreen.classList.contains('hidden')) {
         this.respawn();
         return;
       }
     }
-    
-    let direction: number | null = null;
-    switch (e.key) {
-      case 'ArrowUp': case 'w': case 'W': direction = 0; break;
-      case 'ArrowRight': case 'd': case 'D': direction = 1; break;
-      case 'ArrowDown': case 's': case 'S': direction = 2; break;
-      case 'ArrowLeft': case 'a': case 'A': direction = 3; break;
+
+    // Track movement keys
+    const validKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'KeyW', 'KeyA', 'KeyS', 'KeyD', 'w', 'a', 's', 'd', 'W', 'A', 'S', 'D'];
+    if (validKeys.includes(e.key) || validKeys.includes(e.code)) {
+      this.pressedKeys.add(e.code);
+      this.lastInputType = 'keyboard';
+      this.updateDirectionAndSend();
     }
-    console.log('Direction:', direction);
-    if (direction !== null) {
-      console.log('Sending direction:', direction);
-      this.conn?.reducers.changeDirection({ direction });
+  }
+
+  private handleKeyUp(e: KeyboardEvent) {
+    this.pressedKeys.delete(e.code);
+    if (this.lastInputType === 'keyboard') {
+      this.updateDirectionAndSend();
+    }
+  }
+
+  private handleWindowBlur() {
+    this.pressedKeys.clear();
+  }
+
+  private handleMouseMove(e: MouseEvent) {
+    this.mouseX = e.clientX;
+    this.mouseY = e.clientY;
+    this.lastInputType = 'mouse';
+    this.updateDirectionAndSend();
+  }
+
+  private handleTouchStart(e: TouchEvent) {
+    e.preventDefault();
+    if (e.touches.length > 0) {
+      const touch = e.touches[0];
+      this.mouseX = touch.clientX;
+      this.mouseY = touch.clientY;
+      this.lastInputType = 'touch';
+      this.updateDirectionAndSend();
+    }
+  }
+
+  private handleTouchMove(e: TouchEvent) {
+    e.preventDefault();
+    if (e.touches.length > 0) {
+      const touch = e.touches[0];
+      this.mouseX = touch.clientX;
+      this.mouseY = touch.clientY;
+      this.lastInputType = 'touch';
+      this.updateDirectionAndSend();
+    }
+  }
+
+  private handleTouchEnd() {
+    // Touch ended, but keep last direction (snake keeps moving)
+  }
+
+  private calculateDirection(): number {
+    if (this.lastInputType === 'keyboard') {
+      // Check key combinations for 8-directional movement
+      const up = this.pressedKeys.has('ArrowUp') || this.pressedKeys.has('KeyW');
+      const down = this.pressedKeys.has('ArrowDown') || this.pressedKeys.has('KeyS');
+      const left = this.pressedKeys.has('ArrowLeft') || this.pressedKeys.has('KeyA');
+      const right = this.pressedKeys.has('ArrowRight') || this.pressedKeys.has('KeyD');
+
+      // Cancel out opposing keys
+      const netY = (down ? 1 : 0) - (up ? 1 : 0);
+      const netX = (right ? 1 : 0) - (left ? 1 : 0);
+
+      if (netX === 0 && netY === 0) {
+        return this.currentDirectionAngle;
+      }
+
+      return Math.atan2(netY, netX);
+    } else {
+      // Mouse or touch: angle from screen center to cursor
+      const centerX = window.innerWidth / 2;
+      const centerY = window.innerHeight / 2;
+      return Math.atan2(this.mouseY - centerY, this.mouseX - centerX);
+    }
+  }
+
+  private updateDirectionAndSend() {
+    const newAngle = this.calculateDirection();
+
+    // Only send if angle changed significantly (0.01 radians ~ 0.57 degrees)
+    if (Math.abs(newAngle - this.currentDirectionAngle) > 0.01) {
+      this.currentDirectionAngle = newAngle;
+      this.conn?.reducers.changeDirection({ direction: newAngle });
     }
   }
 
@@ -1038,11 +1130,26 @@ class Game {
     document.getElementById('leaderboard')?.classList.remove('hidden');
     document.getElementById('player-name')!.textContent = name;
     document.getElementById('loading')?.classList.add('hidden');
-    
+
     // Update sound mode for gameplay
     this.soundManager.setMenuMode(false, false);
-    
+
+    // Start direction update loop
+    this.startDirectionUpdateLoop();
+
     if (this.conn) this.conn.reducers.joinGame({ name, color: selectedColor });
+  }
+
+  private startDirectionUpdateLoop() {
+    // Send direction periodically (every 50ms = 20 updates/sec)
+    if (this.directionUpdateInterval) {
+      clearInterval(this.directionUpdateInterval);
+    }
+    this.directionUpdateInterval = window.setInterval(() => {
+      if (this.lastInputType === 'keyboard') {
+        this.updateDirectionAndSend();
+      }
+    }, 50);
   }
 
   private respawn() {
