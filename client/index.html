@@ -48,6 +48,24 @@
       background: linear-gradient(135deg, rgba(26,26,46,0.95) 0%, rgba(22,33,62,0.95) 50%, rgba(15,52,96,0.95) 100%);
       z-index: 100;
     }
+
+    .game-credit {
+      position: absolute;
+      bottom: 20px;
+      font-size: 0.9rem;
+      color: rgba(255, 255, 255, 0.5);
+      font-weight: 400;
+    }
+
+    .game-credit a {
+      color: #00d9ff;
+      text-decoration: none;
+      transition: color 0.3s ease;
+    }
+
+    .game-credit a:hover {
+      color: #00ff88;
+    }
     
     #menu.hidden {
       display: none;
@@ -346,6 +364,7 @@
         <div class="color-picker" id="color-picker"></div>
         <button class="play-btn" id="play-btn">Play</button>
       </div>
+      <p class="game-credit">A <a href="https://github.com/rrichglitch" target="_blank" rel="noopener noreferrer">@rrichglitch</a> Game</p>
     </div>
     
     <canvas id="gameCanvas"></canvas>

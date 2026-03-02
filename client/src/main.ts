@@ -2,6 +2,11 @@
 import { DbConnection, tables } from './module_bindings/index';
 import type { SnakeSegment } from './module_bindings/types';
 
+// Sound file imports (Vite handles these)
+import backgroundMusicUrl from './assets/sounds/snek_background_song.mp3';
+import eatSoundUrl from './assets/sounds/short_crunch.mp3';
+import deathSoundUrl from './assets/sounds/8bit_death.mp3';
+
 const COLORS = [
   '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
   '#DDA0DD', '#98D8C8', '#F7DC6F', '#FFB347',
@@ -43,6 +48,143 @@ interface Food {
   x: number;
   y: number;
   color: string;
+}
+
+class SoundManager {
+  private audioContext: AudioContext | null = null;
+  private backgroundMusic: HTMLAudioElement | null = null;
+  private backgroundSource: MediaElementAudioSourceNode | null = null;
+  private backgroundGain: GainNode | null = null;
+  private lowPassFilter: BiquadFilterNode | null = null;
+  private eatSound: HTMLAudioElement | null = null;
+  private deathSound: HTMLAudioElement | null = null;
+  private isInitialized: boolean = false;
+  private isPlaying: boolean = false;
+  private baseVolume: number = 0.4;
+  private muffledVolume: number = 0.15;
+
+  constructor() {
+    this.initializeAudio();
+  }
+
+  private initializeAudio() {
+    try {
+      // Create audio context
+      this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      
+      // Setup background music
+      this.backgroundMusic = new Audio(backgroundMusicUrl);
+      this.backgroundMusic.loop = true;
+      
+      // Setup Web Audio API nodes for background music
+      if (this.audioContext) {
+        this.backgroundSource = this.audioContext.createMediaElementSource(this.backgroundMusic);
+        this.backgroundGain = this.audioContext.createGain();
+        this.lowPassFilter = this.audioContext.createBiquadFilter();
+        
+        this.lowPassFilter.type = 'lowpass';
+        this.lowPassFilter.frequency.value = 20000; // Full frequency by default
+        
+        this.backgroundSource.connect(this.lowPassFilter);
+        this.lowPassFilter.connect(this.backgroundGain);
+        this.backgroundGain.connect(this.audioContext.destination);
+        
+        this.backgroundGain.gain.value = this.baseVolume;
+      }
+      
+      // Setup one-shot sounds
+      this.eatSound = new Audio(eatSoundUrl);
+      this.deathSound = new Audio(deathSoundUrl);
+      
+      this.isInitialized = true;
+      console.log('SoundManager initialized');
+    } catch (error) {
+      console.error('Failed to initialize SoundManager:', error);
+    }
+  }
+
+  private ensureAudioContext() {
+    if (this.audioContext && this.audioContext.state === 'suspended') {
+      this.audioContext.resume();
+    }
+  }
+
+  startBackgroundMusic() {
+    if (!this.isInitialized || !this.backgroundMusic) return;
+    
+    this.ensureAudioContext();
+    
+    if (!this.isPlaying) {
+      this.backgroundMusic.play().catch(err => {
+        console.warn('Failed to play background music (may need user interaction):', err);
+      });
+      this.isPlaying = true;
+    }
+  }
+
+  playEatSound() {
+    if (!this.isInitialized || !this.eatSound || !this.audioContext) return;
+    
+    this.ensureAudioContext();
+    
+    // Clone audio to allow overlapping sounds
+    const soundClone = this.eatSound.cloneNode() as HTMLAudioElement;
+    const source = this.audioContext.createMediaElementSource(soundClone);
+    const gain = this.audioContext.createGain();
+    
+    gain.gain.value = 0.5;
+    source.connect(gain);
+    gain.connect(this.audioContext.destination);
+    
+    soundClone.currentTime = 0;
+    soundClone.play().catch(err => {
+      console.warn('Failed to play eat sound:', err);
+    });
+    
+    // Cleanup after playback
+    soundClone.addEventListener('ended', () => {
+      soundClone.remove();
+    });
+  }
+
+  playDeathSound() {
+    if (!this.isInitialized || !this.deathSound || !this.audioContext) return;
+    
+    this.ensureAudioContext();
+    
+    // Clone audio to allow overlapping sounds
+    const soundClone = this.deathSound.cloneNode() as HTMLAudioElement;
+    const source = this.audioContext.createMediaElementSource(soundClone);
+    const gain = this.audioContext.createGain();
+    
+    gain.gain.value = 0.6;
+    source.connect(gain);
+    gain.connect(this.audioContext.destination);
+    
+    soundClone.currentTime = 0;
+    soundClone.play().catch(err => {
+      console.warn('Failed to play death sound:', err);
+    });
+    
+    // Cleanup after playback
+    soundClone.addEventListener('ended', () => {
+      soundClone.remove();
+    });
+  }
+
+  setMenuMode(isMenuVisible: boolean, isDeathScreenVisible: boolean) {
+    if (!this.isInitialized || !this.backgroundGain || !this.lowPassFilter) return;
+    
+    if (isMenuVisible || isDeathScreenVisible) {
+      // Muffle music
+      this.backgroundGain.gain.setTargetAtTime(this.muffledVolume, this.audioContext!.currentTime, 0.3);
+      this.lowPassFilter.frequency.setTargetAtTime(400, this.audioContext!.currentTime, 0.3);
+    } else {
+      // Restore normal music
+      this.backgroundGain.gain.setTargetAtTime(this.baseVolume, this.audioContext!.currentTime, 0.3);
+      this.lowPassFilter.frequency.setTargetAtTime(20000, this.audioContext!.currentTime, 0.3);
+    }
+  }
 }
 
 class WebGPURenderer {
@@ -537,6 +679,7 @@ class WebGPURenderer {
 class Game {
   private conn: DbConnection | null = null;
   private renderer: WebGPURenderer | null = null;
+  private soundManager: SoundManager;
   private players: Map<string, Player> = new Map();
   private segments: Map<string, { segmentIndex: number; x: number; y: number; width: number }[]> = new Map();
   private bots: Map<string, Bot> = new Map();
@@ -544,8 +687,13 @@ class Game {
   private foods: Food[] = [];
   private myIdentity: string = '';
   private myScore: number = 0;
+  private myPreviousScore: number = 0;
   private connected: boolean = false;
   private leaderboardUpdateCounter: number = 0;
+
+  constructor() {
+    this.soundManager = new SoundManager();
+  }
 
   async init() {
     const canvas = document.getElementById('gameCanvas') as HTMLCanvasElement;
@@ -563,6 +711,9 @@ class Game {
     window.addEventListener('resize', () => this.resizeCanvas());
 
     await this.connectToServer();
+    
+    // Start background music
+    this.soundManager.startBackgroundMusic();
     
     // Start the game loop
     requestAnimationFrame(this.gameLoop);
@@ -708,6 +859,10 @@ class Game {
           length: newPlayer.length 
         });
         if (newPlayer.identity.toString() === this.myIdentity) { 
+          // Check if score increased (food eaten)
+          if (newPlayer.score > this.myScore) {
+            this.soundManager.playEatSound();
+          }
           this.myScore = newPlayer.score; 
           document.getElementById('score')!.textContent = newPlayer.score.toString(); 
         }
@@ -883,12 +1038,20 @@ class Game {
     document.getElementById('leaderboard')?.classList.remove('hidden');
     document.getElementById('player-name')!.textContent = name;
     document.getElementById('loading')?.classList.add('hidden');
+    
+    // Update sound mode for gameplay
+    this.soundManager.setMenuMode(false, false);
+    
     if (this.conn) this.conn.reducers.joinGame({ name, color: selectedColor });
   }
 
   private respawn() {
     document.getElementById('death-screen')?.classList.add('hidden');
     document.getElementById('leaderboard')?.classList.remove('hidden');
+    
+    // Update sound mode for gameplay
+    this.soundManager.setMenuMode(false, false);
+    
     const name = (document.getElementById('name-input') as HTMLInputElement).value.trim() || 'Anonymous';
     let selectedColor = COLORS[0];
     document.querySelectorAll('.color-option.selected').forEach(el => { selectedColor = (el as any).dataset.color || COLORS[0]; });
@@ -902,6 +1065,10 @@ class Game {
     }
     document.getElementById('death-screen')?.classList.remove('hidden');
     document.getElementById('leaderboard')?.classList.add('hidden');
+    
+    // Play death sound and muffle background music
+    this.soundManager.playDeathSound();
+    this.soundManager.setMenuMode(false, true);
   }
 
   private updateLeaderboard() {
