@@ -62,6 +62,7 @@ class SoundManager {
   private isPlaying: boolean = false;
   private baseVolume: number = 0.4;
   private muffledVolume: number = 0.15;
+  private eatSoundPlaying: boolean = false;
 
   constructor() {
     this.initializeAudio();
@@ -125,7 +126,11 @@ class SoundManager {
   playEatSound() {
     if (!this.isInitialized || !this.eatSound || !this.audioContext) return;
     
+    // Don't play if already playing
+    if (this.eatSoundPlaying) return;
+    
     this.ensureAudioContext();
+    this.eatSoundPlaying = true;
     
     // Clone audio to allow overlapping sounds
     const soundClone = this.eatSound.cloneNode() as HTMLAudioElement;
@@ -139,11 +144,13 @@ class SoundManager {
     soundClone.currentTime = 0;
     soundClone.play().catch(err => {
       console.warn('Failed to play eat sound:', err);
+      this.eatSoundPlaying = false;
     });
     
     // Cleanup after playback
     soundClone.addEventListener('ended', () => {
       soundClone.remove();
+      this.eatSoundPlaying = false;
     });
   }
 
@@ -634,10 +641,9 @@ class WebGPURenderer {
               this.addCircle(vertices, leftNostrilX, leftNostrilY, nostrilRadius, 0.2, 0.1, 0.05);
               this.addCircle(vertices, rightNostrilX, rightNostrilY, nostrilRadius, 0.2, 0.1, 0.05);
             } else {
-              // Body segments - render slightly larger than food to ensure coverage
-              // Use 15 instead of 14 to be larger than the 10-unit food
+              // Body segments - render as circles
               const renderWidth = Math.max(baseWidth, 15);
-              this.addQuad(vertices, sx - renderWidth/2, sy - renderWidth/2, renderWidth, renderWidth, r, g, b);
+              this.addCircle(vertices, sx, sy, renderWidth / 2, r, g, b);
             }
           }
         }
@@ -730,15 +736,14 @@ class Game {
   private setupColorPicker() {
     const picker = document.getElementById('color-picker');
     if (!picker) return;
-    
-    const randomIndex = Math.floor(Math.random() * COLORS.length);
-    
+
     COLORS.forEach((color, i) => {
       const div = document.createElement('div');
-      div.className = 'color-option' + (i === randomIndex ? ' selected' : '');
+      div.className = 'color-option' + (i === this.selectedColorIndex ? ' selected' : '');
       div.style.backgroundColor = color;
       div.dataset.color = color;
       div.addEventListener('click', () => {
+        this.selectedColorIndex = i;
         picker.querySelectorAll('.color-option').forEach(el => el.classList.remove('selected'));
         div.classList.add('selected');
       });
@@ -773,13 +778,59 @@ class Game {
     this.renderer?.resize(window.innerWidth, window.innerHeight);
   }
 
+  private selectedColorIndex: number = Math.floor(Math.random() * COLORS.length);
+
   private handleKeyDown(e: KeyboardEvent) {
+    // Check if menu is visible
+    const menu = document.getElementById('menu');
+    const isMenuVisible = menu && !menu.classList.contains('hidden');
+
+    // Handle color selection with arrow keys when menu is visible
+    if (isMenuVisible) {
+      let colorChanged = false;
+      const numColorsPerRow = 10;
+
+      switch (e.key) {
+        case 'ArrowRight':
+          this.selectedColorIndex = (this.selectedColorIndex + 1) % COLORS.length;
+          colorChanged = true;
+          break;
+        case 'ArrowLeft':
+          this.selectedColorIndex = (this.selectedColorIndex - 1 + COLORS.length) % COLORS.length;
+          colorChanged = true;
+          break;
+        case 'ArrowDown':
+          this.selectedColorIndex = Math.min(COLORS.length - 1, this.selectedColorIndex + numColorsPerRow);
+          colorChanged = true;
+          break;
+        case 'ArrowUp':
+          this.selectedColorIndex = Math.max(0, this.selectedColorIndex - numColorsPerRow);
+          colorChanged = true;
+          break;
+      }
+
+      if (colorChanged) {
+        e.preventDefault();
+        const picker = document.getElementById('color-picker');
+        if (picker) {
+          const options = picker.querySelectorAll('.color-option');
+          options.forEach((el, i) => {
+            if (i === this.selectedColorIndex) {
+              el.classList.add('selected');
+            } else {
+              el.classList.remove('selected');
+            }
+          });
+        }
+        return;
+      }
+    }
+
     // Handle Enter key for play/respawn
     if (e.key === 'Enter') {
-      const menu = document.getElementById('menu');
       const deathScreen = document.getElementById('death-screen');
 
-      if (menu && !menu.classList.contains('hidden')) {
+      if (isMenuVisible) {
         this.joinGame();
         return;
       }

@@ -588,14 +588,18 @@ tickReducer = spacetimedb.reducer(
                 });
                 
                 const playerSegments = getSegmentsByOwner(ctx, player.identity);
+                let segIndex = 0;
                 for (const seg of playerSegments) {
-                  ctx.db.food.insert({
-                    id: 0n,
-                    x: seg.x,
-                    y: seg.y,
-                    color: '#FF6B6B',
-                  });
+                  if (segIndex % 3 === 0) {
+                    ctx.db.food.insert({
+                      id: 0n,
+                      x: seg.x,
+                      y: seg.y,
+                      color: '#FF6B6B',
+                    });
+                  }
                   ctx.db.snake_segment.id.delete(seg.id);
+                  segIndex++;
                 }
                 break;
               } else {
@@ -615,14 +619,18 @@ tickReducer = spacetimedb.reducer(
                 });
                 
                 const playerSegments = getSegmentsByOwner(ctx, player.identity);
+                let segIndex = 0;
                 for (const seg of playerSegments) {
-                  ctx.db.food.insert({
-                    id: 0n,
-                    x: seg.x,
-                    y: seg.y,
-                    color: '#FF6B6B',
-                  });
+                  if (segIndex % 3 === 0) {
+                    ctx.db.food.insert({
+                      id: 0n,
+                      x: seg.x,
+                      y: seg.y,
+                      color: '#FF6B6B',
+                    });
+                  }
                   ctx.db.snake_segment.id.delete(seg.id);
+                  segIndex++;
                 }
                 break;
               }
@@ -630,27 +638,31 @@ tickReducer = spacetimedb.reducer(
               // Not a head-on collision, normal collision rules apply
               player.alive = false;
               player.score = 0;
-              
+
               ctx.db.player_died_event.insert({
                 identity: player.identity,
                 killer_name: other.name,
               });
-              
+
               ctx.db.player.identity.update({
                 ...player,
                 alive: false,
                 score: 0,
               });
-              
+
               const playerSegments = getSegmentsByOwner(ctx, player.identity);
+              let segIndex = 0;
               for (const seg of playerSegments) {
-                ctx.db.food.insert({
-                  id: 0n,
-                  x: seg.x,
-                  y: seg.y,
-                  color: '#FF6B6B',
-                });
+                if (segIndex % 3 === 0) {
+                  ctx.db.food.insert({
+                    id: 0n,
+                    x: seg.x,
+                    y: seg.y,
+                    color: '#FF6B6B',
+                  });
+                }
                 ctx.db.snake_segment.id.delete(seg.id);
+                segIndex++;
               }
               break;
             }
@@ -683,14 +695,18 @@ tickReducer = spacetimedb.reducer(
               });
               
               const playerSegments = getSegmentsByOwner(ctx, player.identity);
+              let segIndex = 0;
               for (const seg of playerSegments) {
-                ctx.db.food.insert({
-                  id: 0n,
-                  x: seg.x,
-                  y: seg.y,
-                  color: '#FF6B6B',
-                });
+                if (segIndex % 3 === 0) {
+                  ctx.db.food.insert({
+                    id: 0n,
+                    x: seg.x,
+                    y: seg.y,
+                    color: '#FF6B6B',
+                  });
+                }
                 ctx.db.snake_segment.id.delete(seg.id);
+                segIndex++;
               }
               break;
             }
@@ -711,27 +727,31 @@ tickReducer = spacetimedb.reducer(
           if (dist < 10) { // Reduced radius for more accurate collision
             player.alive = false;
             player.score = 0;
-            
+
             ctx.db.player_died_event.insert({
               identity: player.identity,
               killer_name: 'yourself',
             });
-            
+
             ctx.db.player.identity.update({
               ...player,
               alive: false,
               score: 0,
             });
-            
+
             const playerSegments = getSegmentsByOwner(ctx, player.identity);
+            let segIndex = 0;
             for (const seg of playerSegments) {
-              ctx.db.food.insert({
-                id: 0n,
-                x: seg.x,
-                y: seg.y,
-                color: '#FF6B6B',
-              });
+              if (segIndex % 3 === 0) {
+                ctx.db.food.insert({
+                  id: 0n,
+                  x: seg.x,
+                  y: seg.y,
+                  color: '#FF6B6B',
+                });
+              }
               ctx.db.snake_segment.id.delete(seg.id);
+              segIndex++;
             }
             break;
           }
@@ -908,15 +928,19 @@ tickReducer = spacetimedb.reducer(
           score: 0,
         });
         
-        // Convert dead bot's segments to food
+        // Convert dead bot's segments to food (every 3rd segment)
+        let segIndex = 0;
         for (const seg of segments) {
-          ctx.db.food.insert({
-            id: 0n,
-            x: seg.x,
-            y: seg.y,
-            color: '#FF6B6B',
-          });
+          if (segIndex % 3 === 0) {
+            ctx.db.food.insert({
+              id: 0n,
+              x: seg.x,
+              y: seg.y,
+              color: '#FF6B6B',
+            });
+          }
           ctx.db.bot_segment.id.delete(seg.id);
+          segIndex++;
         }
       } else {
         ctx.db.bot.id.update({
@@ -995,14 +1019,18 @@ export const on_disconnect = spacetimedb.clientDisconnected((ctx: any) => {
   const player = ctx.db.player.identity.find(sender);
   if (player) {
     const segments = getSegmentsByOwner(ctx, sender);
+    let segIndex = 0;
     for (const seg of segments) {
-      ctx.db.food.insert({
-        id: 0n,
-        x: seg.x,
-        y: seg.y,
-        color: '#FF6B6B',
-      });
+      if (segIndex % 3 === 0) {
+        ctx.db.food.insert({
+          id: 0n,
+          x: seg.x,
+          y: seg.y,
+          color: '#FF6B6B',
+        });
+      }
       ctx.db.snake_segment.id.delete(seg.id);
+      segIndex++;
     }
 
     ctx.db.player.identity.delete(sender);
