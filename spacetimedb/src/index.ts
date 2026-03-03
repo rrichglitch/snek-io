@@ -415,16 +415,13 @@ export const change_direction = spacetimedb.reducer(
     // Prevent 180° turns - clamp to nearest allowed angle (90° dead zone)
     const currentDir = player.direction;
     let angleDiff = normalizeAngle(direction - currentDir);
-    const deadZoneHalf = Math.PI / 2; // 90° in radians (180° total dead zone = max 90° turn)
+    const deadZoneHalf = Math.PI / 4; // 45° in radians (90° total dead zone = max 135° turn)
     const reverseAngle = Math.PI; // 180°
+    const maxTurnAngle = reverseAngle - deadZoneHalf; // 135° = max allowed turn
     
-    if (Math.abs(angleDiff) > reverseAngle - deadZoneHalf) {
-      // Clamp to nearest edge of dead zone
-      if (angleDiff > 0) {
-        angleDiff = reverseAngle - deadZoneHalf;
-      } else {
-        angleDiff = -(reverseAngle - deadZoneHalf);
-      }
+    if (Math.abs(angleDiff) > maxTurnAngle) {
+      // Clamp to max allowed turn angle
+      angleDiff = angleDiff > 0 ? maxTurnAngle : -maxTurnAngle;
       direction = currentDir + angleDiff;
     }
 
@@ -538,18 +535,18 @@ tickReducer = spacetimedb.reducer(
       // Prevent 180° turns - clamp to nearest allowed angle (90° dead zone)
       const currentDir = player.direction;
       let angleDiff = normalizeAngle(newDir - currentDir);
-      const deadZoneHalf = Math.PI / 2; // 90° in radians
+      const deadZoneHalf = Math.PI / 4; // 45° in radians
       const reverseAngle = Math.PI;
+      const maxTurnAngle = reverseAngle - deadZoneHalf; // 135° = max allowed turn
       
-      if (Math.abs(angleDiff) > reverseAngle - deadZoneHalf) {
-        // Clamp to nearest edge of dead zone
-        if (angleDiff > 0) {
-          angleDiff = reverseAngle - deadZoneHalf;
-        } else {
-          angleDiff = -(reverseAngle - deadZoneHalf);
-        }
+      if (Math.abs(angleDiff) > maxTurnAngle) {
+        // Clamp to max allowed turn angle
+        angleDiff = angleDiff > 0 ? maxTurnAngle : -maxTurnAngle;
         newDir = currentDir + angleDiff;
       }
+
+      // Save the clamped direction back to pending_direction so it persists
+      player.pending_direction = newDir;
 
       // Check and update dash state
       let currentSpeed = MOVE_SPEED;
@@ -877,16 +874,13 @@ tickReducer = spacetimedb.reducer(
       // Prevent 180° turns - clamp to nearest allowed angle (90° dead zone)
       const currentDir = bot.direction;
       let angleDiff = normalizeAngle(newDir - currentDir);
-      const deadZoneHalf = Math.PI / 2; // 90° in radians
+      const deadZoneHalf = Math.PI / 4; // 45° in radians
       const reverseAngle = Math.PI;
+      const maxTurnAngle = reverseAngle - deadZoneHalf; // 135° = max allowed turn
       
-      if (Math.abs(angleDiff) > reverseAngle - deadZoneHalf) {
-        // Clamp to nearest edge of dead zone
-        if (angleDiff > 0) {
-          angleDiff = reverseAngle - deadZoneHalf;
-        } else {
-          angleDiff = -(reverseAngle - deadZoneHalf);
-        }
+      if (Math.abs(angleDiff) > maxTurnAngle) {
+        // Clamp to max allowed turn angle
+        angleDiff = angleDiff > 0 ? maxTurnAngle : -maxTurnAngle;
         newDir = currentDir + angleDiff;
       }
 
