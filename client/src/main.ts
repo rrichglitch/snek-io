@@ -1450,9 +1450,10 @@ class Game {
     // Clear existing names
     namesContainer.innerHTML = '';
     
-    // Render player names
+    // Render player names (skip own player)
     for (const [identity, player] of this.players) {
       if (!player.alive) continue;
+      if (identity === this.myIdentity) continue; // Don't show own name
       this.addNameLabel(namesContainer, player.name, player.x, player.y, cameraX, cameraY, width, height);
     }
     
@@ -1532,7 +1533,7 @@ class Game {
     const btn = document.createElement('button');
     btn.className = 'play-btn install-btn';
     btn.textContent = 'Mobile App';
-    btn.style.marginTop = '1rem';
+    btn.style.marginBottom = '1rem';
     btn.style.display = 'none';
     
     btn.onclick = async () => {
