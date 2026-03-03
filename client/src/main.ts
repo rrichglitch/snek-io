@@ -258,6 +258,19 @@ class WebGPURenderer {
   private cameraY: number = 1000;
   private viewportWidth: number = 800;
   private viewportHeight: number = 600;
+
+  getViewportDimensions(): { width: number; height: number } {
+    return { width: this.viewportWidth, height: this.viewportHeight };
+  }
+
+  getCameraPosition(): { x: number; y: number } {
+    return { x: this.cameraX, y: this.cameraY };
+  }
+
+  getPlayers(): Map<string, { x: number; y: number; color: string; alive: boolean; direction: number; segments: { x: number; y: number; width: number }[] }> {
+    return this.players;
+  }
+
   private maxVertices: number = 500000; // Increased from 100k to prevent invisibility bugs
 
   constructor(canvas: HTMLCanvasElement) {
@@ -398,9 +411,31 @@ class WebGPURenderer {
     });
   }
 
+  private readonly BASE_ASPECT = 4 / 3; // Base aspect ratio for element sizing
+  private readonly BASE_WIDTH = 800; // Base width for element scaling
+  private readonly BASE_HEIGHT = 600; // Base height for element scaling
+
   resize(width: number, height: number) {
-    this.viewportWidth = width;
-    this.viewportHeight = height;
+    // Calculate expanded viewport while preserving aspect ratio for elements
+    // This shows more field without stretching elements
+    const currentAspect = width / height;
+    const baseAspect = this.BASE_ASPECT;
+    
+    if (currentAspect > baseAspect) {
+      // Screen is wider than base - expand horizontally to show more field
+      // Keep height at base, expand width
+      this.viewportHeight = height;
+      this.viewportWidth = Math.round(height * baseAspect);
+    } else if (currentAspect < baseAspect) {
+      // Screen is taller than base - expand vertically to show more field
+      // Keep width at base, expand height
+      this.viewportWidth = width;
+      this.viewportHeight = Math.round(width / baseAspect);
+    } else {
+      // Exact match
+      this.viewportWidth = width;
+      this.viewportHeight = height;
+    }
   }
 
   setPlayers(players: Map<string, { x: number; y: number; color: string; alive: boolean; direction: number; segments: { x: number; y: number; width: number }[] }>) {
@@ -839,8 +874,8 @@ class Game {
 
   private resizeCanvas() {
     const canvas = document.getElementById('gameCanvas') as HTMLCanvasElement;
-    canvas.width = screen.width || window.outerWidth || window.innerWidth;
-    canvas.height = screen.height || window.outerHeight || window.innerHeight;
+    canvas.width = window.innerWidth || window.outerWidth || window.innerWidth;
+    canvas.height = window.innerHeight || window.outerHeight || window.innerHeight;
     this.renderer?.resize(canvas.width, canvas.height);
   }
 
@@ -1431,21 +1466,43 @@ class Game {
     const canvas = document.getElementById('gameCanvas') as HTMLCanvasElement;
     if (!canvas) return;
     
-    const width = canvas.width;
-    const height = canvas.height;
-    const centerX = width / 2;
-    const centerY = height / 2;
+    // Get camera and viewport from renderer directly to ensure consistency
+    let cameraX = 0;
+    let cameraY = 0;
+    let viewportWidth = canvas.width;
+    let viewportHeight = canvas.height;
     
-    // Get camera position (centered on player)
-    let cameraX = centerX;
-    let cameraY = centerY;
-    if (this.myIdentity) {
-      const myPlayer = this.players.get(this.myIdentity);
-      if (myPlayer && myPlayer.alive) {
-        cameraX = myPlayer.x;
-        cameraY = myPlayer.y;
+    try {
+      const camera = this.renderer?.getCameraPosition();
+      const viewport = this.renderer?.getViewportDimensions();
+      const players = this.renderer?.getPlayers();
+      
+      if (camera && viewport) {
+        cameraX = camera.x;
+        cameraY = camera.y;
+        viewportWidth = viewport.width;
+        viewportHeight = viewport.height;
+        
+        // Fallback: if renderer doesn't have camera (player not spawned yet), use own player data
+        if (cameraX === 1000 && cameraY === 1000 && this.myIdentity) {
+          const myPlayer = this.players.get(this.myIdentity);
+          if (myPlayer && myPlayer.alive) {
+            cameraX = myPlayer.x - viewportWidth / 2;
+            cameraY = myPlayer.y - viewportHeight / 2;
+          }
+        }
       }
+    } catch (e) {
+      // Fallback to canvas dimensions if renderer not ready
     }
+    
+    // Canvas full screen dimensions
+    const canvasWidth = canvas.width;
+    const canvasHeight = canvas.height;
+    
+    // Offset of viewport within canvas (centered)
+    const offsetX = (canvasWidth - viewportWidth) / 2;
+    const offsetY = (canvasHeight - viewportHeight) / 2;
     
     // Clear existing names
     namesContainer.innerHTML = '';
@@ -1453,24 +1510,27 @@ class Game {
     // Render player names (skip own player)
     for (const [identity, player] of this.players) {
       if (!player.alive) continue;
-      if (identity === this.myIdentity) continue; // Don't show own name
-      this.addNameLabel(namesContainer, player.name, player.x, player.y, cameraX, cameraY, width, height);
+      if (identity === this.myIdentity) continue;
+      this.addNameLabel(namesContainer, player.name, player.x, player.y, cameraX, cameraY, viewportWidth, viewportHeight, offsetX, offsetY, canvasWidth, canvasHeight);
     }
     
     // Render bot names
     for (const [botId, bot] of this.bots) {
       if (!bot.alive) continue;
-      this.addNameLabel(namesContainer, bot.name, bot.x, bot.y, cameraX, cameraY, width, height);
+      this.addNameLabel(namesContainer, bot.name, bot.x, bot.y, cameraX, cameraY, viewportWidth, viewportHeight, offsetX, offsetY, canvasWidth, canvasHeight);
     }
   }
   
-  private addNameLabel(container: HTMLElement, name: string, worldX: number, worldY: number, cameraX: number, cameraY: number, screenWidth: number, screenHeight: number) {
+  private addNameLabel(container: HTMLElement, name: string, worldX: number, worldY: number, cameraX: number, cameraY: number, viewportWidth: number, viewportHeight: number, offsetX: number = 0, offsetY: number = 0, canvasWidth: number = 0, canvasHeight: number = 0) {
     const offset = 25;
-    const screenX = screenWidth / 2 + (worldX - cameraX);
-    const screenY = screenHeight / 2 + (worldY - cameraY) - offset;
+    // cameraX is the top-left of the viewport in world coordinates
+    // A point at cameraX should appear at screen position offsetX (top-left of viewport)
+    const screenX = worldX - cameraX + offsetX;
+    const screenY = worldY - cameraY + offsetY - offset;
     
-    // Skip if outside viewport
-    if (screenX < -50 || screenX > screenWidth + 50 || screenY < -50 || screenY > screenHeight + 50) return;
+    // Skip if outside the actual canvas screen (not viewport)
+    // Names can appear anywhere on the full canvas, not just the viewport area
+    if (screenX < -50 || screenX > canvasWidth + 50 || screenY < -50 || screenY > canvasHeight + 50) return;
     
     const div = document.createElement('div');
     div.className = 'snake-name';
