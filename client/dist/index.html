@@ -428,8 +428,8 @@
 
     #speaker-icon {
       position: absolute;
-      top: 1rem;
-      left: 1rem;
+      top: 0.5rem;
+      left: 0.5rem;
       font-size: 1.5rem;
       cursor: pointer;
       z-index: 200;
@@ -445,16 +445,13 @@
     @media (orientation: landscape) {
       #speaker-icon {
         top: 0.5rem;
-        top: calc(0.5rem + env(safe-area-inset-top));
         left: 0.5rem;
-        left: calc(0.5rem + env(safe-area-inset-left));
         font-size: 1.2rem;
         padding: 0.35rem 0.5rem;
       }
 
       #hud {
         padding: 0.5rem;
-        padding-top: calc(0.5rem + env(safe-area-inset-top));
       }
       
       .hud-panel {
