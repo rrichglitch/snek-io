@@ -763,6 +763,7 @@ class Game {
 
     this.setupColorPicker();
     this.setupEventListeners();
+    this.setupPwaInstallPrompt();
     this.resizeCanvas();
     window.addEventListener('resize', () => this.resizeCanvas());
     window.addEventListener('orientationchange', () => {
@@ -1397,6 +1398,9 @@ class Game {
       this.renderer.setPlayers(playerData);
       this.renderer.setFoods(this.foods);
       this.renderer.render();
+      
+      // Render snake names
+      this.renderSnakeNames();
 
       // Update leaderboard every 30 frames (~0.5 seconds at 60fps)
       this.leaderboardUpdateCounter++;
@@ -1407,6 +1411,96 @@ class Game {
     }
     requestAnimationFrame(this.gameLoop);
   };
+
+  private renderSnakeNames() {
+    const namesContainer = document.getElementById('snake-names');
+    if (!namesContainer) return;
+    
+    const canvas = document.getElementById('gameCanvas') as HTMLCanvasElement;
+    if (!canvas) return;
+    
+    const width = canvas.width;
+    const height = canvas.height;
+    const centerX = width / 2;
+    const centerY = height / 2;
+    
+    // Get camera position (centered on player)
+    let cameraX = centerX;
+    let cameraY = centerY;
+    if (this.myIdentity) {
+      const myPlayer = this.players.get(this.myIdentity);
+      if (myPlayer && myPlayer.alive) {
+        cameraX = myPlayer.x;
+        cameraY = myPlayer.y;
+      }
+    }
+    
+    // Clear existing names
+    namesContainer.innerHTML = '';
+    
+    // Render player names
+    for (const [identity, player] of this.players) {
+      if (!player.alive) continue;
+      this.addNameLabel(namesContainer, player.name, player.x, player.y, cameraX, cameraY, width, height);
+    }
+    
+    // Render bot names
+    for (const [botId, bot] of this.bots) {
+      if (!bot.alive) continue;
+      this.addNameLabel(namesContainer, bot.name, bot.x, bot.y, cameraX, cameraY, width, height);
+    }
+  }
+  
+  private addNameLabel(container: HTMLElement, name: string, worldX: number, worldY: number, cameraX: number, cameraY: number, screenWidth: number, screenHeight: number) {
+    const offset = 25;
+    const screenX = screenWidth / 2 + (worldX - cameraX);
+    const screenY = screenHeight / 2 + (worldY - cameraY) - offset;
+    
+    // Skip if outside viewport
+    if (screenX < -50 || screenX > screenWidth + 50 || screenY < -50 || screenY > screenHeight + 50) return;
+    
+    const div = document.createElement('div');
+    div.className = 'snake-name';
+    div.textContent = name;
+    div.style.left = `${screenX}px`;
+    div.style.top = `${screenY}px`;
+    container.appendChild(div);
+  }
+
+  private setupPwaInstallPrompt() {
+    let deferredPrompt: Event | null = null;
+    
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      deferredPrompt = e;
+    });
+    
+    window.addEventListener('appinstalled', () => {
+      deferredPrompt = null;
+    });
+    
+    // Show prompt after a short delay on mobile
+    setTimeout(() => {
+      if (deferredPrompt && /Mobi|Android/i.test(navigator.userAgent)) {
+        const menu = document.getElementById('menu');
+        if (menu && !menu.classList.contains('hidden')) {
+          const btn = document.createElement('button');
+          btn.className = 'play-btn';
+          btn.textContent = 'Add to Home Screen';
+          btn.style.marginTop = '1rem';
+          btn.onclick = async () => {
+            (deferredPrompt as any).prompt();
+            const { outcome } = await (deferredPrompt as any).userChoice;
+            if (outcome === 'accepted') {
+              btn.remove();
+            }
+            deferredPrompt = null;
+          };
+          menu.querySelector('.menu-panel')?.appendChild(btn);
+        }
+      }
+    }, 2000);
+  }
 }
 
 window.addEventListener('load', () => { const game = new Game(); game.init(); });
