@@ -1473,50 +1473,90 @@ class Game {
     window.addEventListener('beforeinstallprompt', (e) => {
       e.preventDefault();
       deferredPrompt = e;
+      this.showInstallButton(deferredPrompt);
     });
     
     window.addEventListener('appinstalled', () => {
       deferredPrompt = null;
+      this.enableLandscapeOrientation();
     });
     
     // Check if already installed
     if (window.matchMedia('(display-mode: standalone)').matches) {
+      this.enableLandscapeOrientation();
       return;
     }
     
-    // Show prompt after a delay on mobile
-    setTimeout(() => {
-      const isMobile = /Mobi|Android/i.test(navigator.userAgent) || /iPad|iPhone|iPod/i.test(navigator.userAgent);
-      
-      if (!isMobile) return;
-      
+    // Check immediately for mobile
+    this.checkAndShowInstallButton();
+    
+    // Also check when menu becomes visible
+    const menuObserver = new MutationObserver(() => {
       const menu = document.getElementById('menu');
-      if (!menu || menu.classList.contains('hidden')) return;
-      
-      // Check if button already exists
-      if (menu.querySelector('.install-btn')) return;
-      
-      const btn = document.createElement('button');
-      btn.className = 'play-btn install-btn';
-      btn.textContent = 'Add to Home Screen';
-      btn.style.marginTop = '1rem';
-      
-      btn.onclick = async () => {
-        if (deferredPrompt) {
-          (deferredPrompt as any).prompt();
-          const { outcome } = await (deferredPrompt as any).userChoice;
-          if (outcome === 'accepted') {
-            btn.remove();
-          }
-          deferredPrompt = null;
-        } else if (/iPad|iPhone|iPod/i.test(navigator.userAgent)) {
-          // iOS Safari - show instructions
-          alert('To install: Tap Share button below, then tap "Add to Home Screen"');
+      if (menu && !menu.classList.contains('hidden')) {
+        this.checkAndShowInstallButton();
+      }
+    });
+    
+    const menu = document.getElementById('menu');
+    if (menu) {
+      menuObserver.observe(menu, { attributes: true, attributeFilter: ['class'] });
+    }
+  }
+  
+  private isMobile(): boolean {
+    return /Mobi|Android/i.test(navigator.userAgent) || /iPad|iPhone|iPod/i.test(navigator.userAgent);
+  }
+  
+  private checkAndShowInstallButton() {
+    if (!this.isMobile()) return;
+    if (window.matchMedia('(display-mode: standalone)').matches) return;
+    
+    const menu = document.getElementById('menu');
+    if (!menu || menu.classList.contains('hidden')) return;
+    if (menu.querySelector('.install-btn')) return;
+    
+    // Create button but don't show yet - wait for deferredPrompt
+    const btn = document.createElement('button');
+    btn.className = 'play-btn install-btn';
+    btn.textContent = 'Add to Home Screen';
+    btn.style.marginTop = '1rem';
+    btn.style.display = 'none';
+    
+    btn.onclick = async () => {
+      const prompt = (window as any).deferredInstallPrompt;
+      if (prompt) {
+        prompt.prompt();
+        const { outcome } = await prompt.userChoice;
+        if (outcome === 'accepted') {
+          btn.remove();
         }
-      };
-      
-      menu.querySelector('.menu-panel')?.appendChild(btn);
-    }, 3000);
+        (window as any).deferredInstallPrompt = null;
+      } else if (/iPad|iPhone|iPod/i.test(navigator.userAgent)) {
+        alert('To install: Tap Share button below, then tap "Add to Home Screen"');
+      }
+    };
+    
+    menu.querySelector('.menu-panel')?.appendChild(btn);
+  }
+  
+  private showInstallButton(prompt: Event) {
+    (window as any).deferredInstallPrompt = prompt;
+    const btn = document.querySelector('.install-btn') as HTMLElement;
+    if (btn) {
+      btn.style.display = 'block';
+    }
+  }
+  
+  private enableLandscapeOrientation() {
+    // Allow landscape orientation when app is installed on mobile
+    const meta = document.querySelector('meta[name="screen-orientation"]');
+    if (meta) {
+      meta.setAttribute('content', 'any');
+    }
+    
+    // Also update the CSS
+    document.documentElement.style.setProperty('--orientation-lock', 'none');
   }
 }
 
