@@ -412,12 +412,20 @@ export const change_direction = spacetimedb.reducer(
       return;
     }
 
-    // Prevent 180° turns (reversing direction) - would cause instant self-collision
+    // Prevent 180° turns - clamp to nearest allowed angle (60° dead zone)
     const currentDir = player.direction;
-    const angleDiff = Math.abs(normalizeAngle(direction - currentDir));
-    if (angleDiff > Math.PI * 0.9 && angleDiff < Math.PI * 1.1) {
-      // New direction is approximately 180° from current - ignore it
-      return;
+    let angleDiff = normalizeAngle(direction - currentDir);
+    const deadZoneHalf = 0.524; // 30° in radians (π * 30/180 = 0.524)
+    const reverseAngle = Math.PI; // 180°
+    
+    if (Math.abs(angleDiff) > reverseAngle - deadZoneHalf) {
+      // Clamp to nearest edge of dead zone
+      if (angleDiff > 0) {
+        angleDiff = reverseAngle - deadZoneHalf;
+      } else {
+        angleDiff = -(reverseAngle - deadZoneHalf);
+      }
+      direction = currentDir + angleDiff;
     }
 
     player.pending_direction = direction;
@@ -527,12 +535,20 @@ tickReducer = spacetimedb.reducer(
     for (const player of players) {
       let newDir = player.pending_direction;
 
-      // Prevent 180° turns (reversing direction) - would cause instant self-collision
+      // Prevent 180° turns - clamp to nearest allowed angle (60° dead zone)
       const currentDir = player.direction;
-      const angleDiff = Math.abs(normalizeAngle(newDir - currentDir));
-      if (angleDiff > Math.PI * 0.9 && angleDiff < Math.PI * 1.1) {
-        // Keep current direction if trying to reverse
-        newDir = currentDir;
+      let angleDiff = normalizeAngle(newDir - currentDir);
+      const deadZoneHalf = 0.524; // 30° in radians
+      const reverseAngle = Math.PI;
+      
+      if (Math.abs(angleDiff) > reverseAngle - deadZoneHalf) {
+        // Clamp to nearest edge of dead zone
+        if (angleDiff > 0) {
+          angleDiff = reverseAngle - deadZoneHalf;
+        } else {
+          angleDiff = -(reverseAngle - deadZoneHalf);
+        }
+        newDir = currentDir + angleDiff;
       }
 
       // Check and update dash state
@@ -858,12 +874,20 @@ tickReducer = spacetimedb.reducer(
       // Choose direction using AI
       let newDir = chooseBotDirection(ctx, bot, foods, players, bots);
 
-      // Prevent 180° turns (reversing direction) - would cause instant self-collision
+      // Prevent 180° turns - clamp to nearest allowed angle (60° dead zone)
       const currentDir = bot.direction;
-      const angleDiff = Math.abs(normalizeAngle(newDir - currentDir));
-      if (angleDiff > Math.PI * 0.9 && angleDiff < Math.PI * 1.1) {
-        // Keep current direction if trying to reverse
-        newDir = currentDir;
+      let angleDiff = normalizeAngle(newDir - currentDir);
+      const deadZoneHalf = 0.524; // 30° in radians
+      const reverseAngle = Math.PI;
+      
+      if (Math.abs(angleDiff) > reverseAngle - deadZoneHalf) {
+        // Clamp to nearest edge of dead zone
+        if (angleDiff > 0) {
+          angleDiff = reverseAngle - deadZoneHalf;
+        } else {
+          angleDiff = -(reverseAngle - deadZoneHalf);
+        }
+        newDir = currentDir + angleDiff;
       }
 
       bot.pending_direction = newDir;
