@@ -1479,27 +1479,44 @@ class Game {
       deferredPrompt = null;
     });
     
-    // Show prompt after a short delay on mobile
+    // Check if already installed
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+      return;
+    }
+    
+    // Show prompt after a delay on mobile
     setTimeout(() => {
-      if (deferredPrompt && /Mobi|Android/i.test(navigator.userAgent)) {
-        const menu = document.getElementById('menu');
-        if (menu && !menu.classList.contains('hidden')) {
-          const btn = document.createElement('button');
-          btn.className = 'play-btn';
-          btn.textContent = 'Add to Home Screen';
-          btn.style.marginTop = '1rem';
-          btn.onclick = async () => {
-            (deferredPrompt as any).prompt();
-            const { outcome } = await (deferredPrompt as any).userChoice;
-            if (outcome === 'accepted') {
-              btn.remove();
-            }
-            deferredPrompt = null;
-          };
-          menu.querySelector('.menu-panel')?.appendChild(btn);
+      const isMobile = /Mobi|Android/i.test(navigator.userAgent) || /iPad|iPhone|iPod/i.test(navigator.userAgent);
+      
+      if (!isMobile) return;
+      
+      const menu = document.getElementById('menu');
+      if (!menu || menu.classList.contains('hidden')) return;
+      
+      // Check if button already exists
+      if (menu.querySelector('.install-btn')) return;
+      
+      const btn = document.createElement('button');
+      btn.className = 'play-btn install-btn';
+      btn.textContent = 'Add to Home Screen';
+      btn.style.marginTop = '1rem';
+      
+      btn.onclick = async () => {
+        if (deferredPrompt) {
+          (deferredPrompt as any).prompt();
+          const { outcome } = await (deferredPrompt as any).userChoice;
+          if (outcome === 'accepted') {
+            btn.remove();
+          }
+          deferredPrompt = null;
+        } else if (/iPad|iPhone|iPod/i.test(navigator.userAgent)) {
+          // iOS Safari - show instructions
+          alert('To install: Tap Share button below, then tap "Add to Home Screen"');
         }
-      }
-    }, 2000);
+      };
+      
+      menu.querySelector('.menu-panel')?.appendChild(btn);
+    }, 3000);
   }
 }
 

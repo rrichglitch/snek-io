@@ -2,7 +2,7 @@
   "name": "snek.io",
   "short_name": "snek.io",
   "description": "Eat food. Grow longer. Don't die.",
-  "start_url": "/",
+  "start_url": "/snek-io",
   "display": "standalone",
   "background_color": "#1a1a2e",
   "theme_color": "#1a1a2e",
