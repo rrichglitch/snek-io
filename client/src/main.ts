@@ -1549,14 +1549,12 @@ class Game {
   }
   
   private enableLandscapeOrientation() {
-    // Allow landscape orientation when app is installed on mobile
-    const meta = document.querySelector('meta[name="screen-orientation"]');
-    if (meta) {
-      meta.setAttribute('content', 'any');
+    // Lock to landscape when app is installed on mobile
+    if (screen.orientation && 'lock' in screen.orientation) {
+      (screen.orientation.lock as (type: string) => Promise<void>)('landscape').catch(() => {
+        // Lock not supported or denied
+      });
     }
-    
-    // Also update the CSS
-    document.documentElement.style.setProperty('--orientation-lock', 'none');
   }
 }
 
