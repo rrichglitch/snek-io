@@ -56,13 +56,15 @@ class SoundManager {
   private backgroundSource: MediaElementAudioSourceNode | null = null;
   private backgroundGain: GainNode | null = null;
   private lowPassFilter: BiquadFilterNode | null = null;
-  private eatSound: HTMLAudioElement | null = null;
+  private eatBuffer: AudioBuffer | null = null;
+  private eatGain: GainNode | null = null;
   private deathSound: HTMLAudioElement | null = null;
   private isInitialized: boolean = false;
   private isPlaying: boolean = false;
   // VOLUME CONTROL: Adjust baseVolume to change background music volume (0.0 to 1.0)
   private baseVolume: number = 0.18; // Reduced from 0.4
   private muffledVolume: number = 0.1;
+  private eatVolume: number = 0.3;
   private eatSoundPlaying: boolean = false;
   private muted: boolean = false;
 
@@ -95,8 +97,27 @@ class SoundManager {
         this.backgroundGain.gain.value = this.baseVolume;
       }
       
-      // Setup one-shot sounds
-      this.eatSound = new Audio(eatSoundUrl);
+      // Setup eat sound - decode as AudioBuffer for low latency through Web Audio API
+      fetch(eatSoundUrl)
+        .then(response => response.arrayBuffer())
+        .then(arrayBuffer => {
+          if (this.audioContext) {
+            return this.audioContext.decodeAudioData(arrayBuffer);
+          }
+          return null;
+        })
+        .then(buffer => {
+          this.eatBuffer = buffer;
+          // Create gain node for eat sound
+          if (this.audioContext) {
+            this.eatGain = this.audioContext.createGain();
+            this.eatGain.gain.value = this.eatVolume;
+            this.eatGain.connect(this.audioContext.destination);
+          }
+        })
+        .catch(err => console.warn('Failed to load eat sound:', err));
+      
+      // Setup death sound
       this.deathSound = new Audio(deathSoundUrl);
       
       this.isInitialized = true;
@@ -141,7 +162,7 @@ class SoundManager {
   }
 
   playEatSound() {
-    if (!this.isInitialized || !this.eatSound || !this.audioContext) return;
+    if (!this.isInitialized || !this.eatBuffer || !this.audioContext || !this.eatGain) return;
     
     // Don't play if already playing
     if (this.eatSoundPlaying) return;
@@ -149,18 +170,16 @@ class SoundManager {
     this.ensureAudioContext();
     this.eatSoundPlaying = true;
     
-    // Simple approach: just play the original sound without cloning
-    // This prevents the complex audio graph issues
-    this.eatSound.currentTime = 0;
-    this.eatSound.play().then(() => {
-      // Reset flag after a short delay to allow rapid eating but prevent overlapping
-      setTimeout(() => {
-        this.eatSoundPlaying = false;
-      }, 100);
-    }).catch(err => {
-      console.warn('Failed to play eat sound:', err);
+    // Play through Web Audio API to avoid system audio ducking
+    const source = this.audioContext.createBufferSource();
+    source.buffer = this.eatBuffer;
+    source.connect(this.eatGain);
+    source.start(0);
+    
+    // Reset flag after sound duration
+    setTimeout(() => {
       this.eatSoundPlaying = false;
-    });
+    }, 100);
   }
 
   playDeathSound() {

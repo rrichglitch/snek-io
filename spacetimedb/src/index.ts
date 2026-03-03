@@ -168,7 +168,7 @@ function chooseBotDirection(ctx: any, bot: any, foods: any[], players: any[], bo
   }
 
   // Try angles at 45-degree increments from desired direction (excluding 180°)
-  const angleOffsets = [Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2, 3 * Math.PI / 4, -3 * Math.PI / 4];
+  const angleOffsets = [Math.PI / 2, -Math.PI / 2, Math.PI / 2, -Math.PI / 2, 3 * Math.PI / 2, -3 * Math.PI / 2];
 
   for (const offset of angleOffsets) {
     const testAngle = desiredDir + offset;
@@ -412,10 +412,10 @@ export const change_direction = spacetimedb.reducer(
       return;
     }
 
-    // Prevent 180° turns - clamp to nearest allowed angle (60° dead zone)
+    // Prevent 180° turns - clamp to nearest allowed angle (90° dead zone)
     const currentDir = player.direction;
     let angleDiff = normalizeAngle(direction - currentDir);
-    const deadZoneHalf = 0.524; // 30° in radians (π * 30/180 = 0.524)
+    const deadZoneHalf = Math.PI / 2; // 90° in radians (180° total dead zone = max 90° turn)
     const reverseAngle = Math.PI; // 180°
     
     if (Math.abs(angleDiff) > reverseAngle - deadZoneHalf) {
@@ -535,10 +535,10 @@ tickReducer = spacetimedb.reducer(
     for (const player of players) {
       let newDir = player.pending_direction;
 
-      // Prevent 180° turns - clamp to nearest allowed angle (60° dead zone)
+      // Prevent 180° turns - clamp to nearest allowed angle (90° dead zone)
       const currentDir = player.direction;
       let angleDiff = normalizeAngle(newDir - currentDir);
-      const deadZoneHalf = 0.524; // 30° in radians
+      const deadZoneHalf = Math.PI / 2; // 90° in radians
       const reverseAngle = Math.PI;
       
       if (Math.abs(angleDiff) > reverseAngle - deadZoneHalf) {
@@ -874,10 +874,10 @@ tickReducer = spacetimedb.reducer(
       // Choose direction using AI
       let newDir = chooseBotDirection(ctx, bot, foods, players, bots);
 
-      // Prevent 180° turns - clamp to nearest allowed angle (60° dead zone)
+      // Prevent 180° turns - clamp to nearest allowed angle (90° dead zone)
       const currentDir = bot.direction;
       let angleDiff = normalizeAngle(newDir - currentDir);
-      const deadZoneHalf = 0.524; // 30° in radians
+      const deadZoneHalf = Math.PI / 2; // 90° in radians
       const reverseAngle = Math.PI;
       
       if (Math.abs(angleDiff) > reverseAngle - deadZoneHalf) {
