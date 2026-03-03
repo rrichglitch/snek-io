@@ -820,8 +820,8 @@ class Game {
 
   private resizeCanvas() {
     const canvas = document.getElementById('gameCanvas') as HTMLCanvasElement;
-    canvas.width = window.outerWidth || window.innerWidth;
-    canvas.height = window.outerHeight || window.innerHeight;
+    canvas.width = screen.width || window.outerWidth || window.innerWidth;
+    canvas.height = screen.height || window.outerHeight || window.innerHeight;
     this.renderer?.resize(canvas.width, canvas.height);
   }
 

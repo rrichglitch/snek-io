@@ -40,12 +40,14 @@
       height: 100vh;
       height: 100dvh;
       position: relative;
-      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
     }
     
     #gameCanvas {
-      width: 100%;
-      height: 100%;
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100vw;
+      height: 100vh;
       display: block;
       touch-action: none;
     }
@@ -88,7 +90,6 @@
     .game-credit {
       position: absolute;
       bottom: 20px;
-      bottom: calc(20px + env(safe-area-inset-bottom));
       font-size: 0.9rem;
       color: rgba(255, 255, 255, 0.5);
       font-weight: 400;
@@ -272,11 +273,9 @@
     #hud {
       position: absolute;
       top: 0;
-      top: env(safe-area-inset-top);
       left: 0;
       width: 100%;
       padding: 1rem;
-      padding-top: calc(1rem + env(safe-area-inset-top));
       display: flex;
       justify-content: space-between;
       pointer-events: none;
@@ -286,9 +285,7 @@
     #leaderboard {
       position: absolute;
       top: 1rem;
-      top: calc(1rem + env(safe-area-inset-top));
       right: 1rem;
-      right: calc(1rem + env(safe-area-inset-right));
       background: rgba(0,0,0,0.7);
       backdrop-filter: blur(10px);
       border-radius: 12px;
@@ -435,9 +432,7 @@
     #speaker-icon {
       position: absolute;
       top: 1rem;
-      top: calc(1rem + env(safe-area-inset-top));
       left: 1rem;
-      left: calc(1rem + env(safe-area-inset-left));
       font-size: 1.5rem;
       cursor: pointer;
       z-index: 200;
