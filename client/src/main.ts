@@ -411,31 +411,12 @@ class WebGPURenderer {
     });
   }
 
-  private readonly BASE_ASPECT = 4 / 3; // Base aspect ratio for element sizing
-  private readonly BASE_WIDTH = 800; // Base width for element scaling
-  private readonly BASE_HEIGHT = 600; // Base height for element scaling
+
 
   resize(width: number, height: number) {
-    // Calculate expanded viewport while preserving aspect ratio for elements
-    // This shows more field without stretching elements
-    const currentAspect = width / height;
-    const baseAspect = this.BASE_ASPECT;
-    
-    if (currentAspect > baseAspect) {
-      // Screen is wider than base - expand horizontally to show more field
-      // Keep height at base, expand width
-      this.viewportHeight = height;
-      this.viewportWidth = Math.round(height * baseAspect);
-    } else if (currentAspect < baseAspect) {
-      // Screen is taller than base - expand vertically to show more field
-      // Keep width at base, expand height
-      this.viewportWidth = width;
-      this.viewportHeight = Math.round(width / baseAspect);
-    } else {
-      // Exact match
-      this.viewportWidth = width;
-      this.viewportHeight = height;
-    }
+    // Use full canvas dimensions
+    this.viewportWidth = width;
+    this.viewportHeight = height;
   }
 
   setPlayers(players: Map<string, { x: number; y: number; color: string; alive: boolean; direction: number; segments: { x: number; y: number; width: number }[] }>) {
