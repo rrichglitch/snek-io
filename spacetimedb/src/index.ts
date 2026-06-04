@@ -1,13 +1,24 @@
 import { schema, table, t } from 'spacetimedb/server';
 import { ScheduleAt } from 'spacetimedb';
 
+// ============================================================
+// Constants
+// ============================================================
+
 const MAP_SIZE = 2000;
 const INITIAL_SNAKE_LENGTH = 4;
 const MAX_FOOD = 200;
 const MOVE_SPEED = 8.0;
 const SEGMENT_SPACING = 18;
 const TICK_INTERVAL_US = 50000n;
-const MIN_SNAKES = 10; // Minimum total snakes (players + bots)
+const MIN_SNAKES = 10;
+
+const DASH_DURATION_MS = 500n;
+const DASH_COOLDOWN_MS = 2500n;
+const DASH_MULTIPLIER = 3;
+
+// 90° dead zone around the 180° reverse — max turn per tick is 135°.
+const MAX_TURN_ANGLE = Math.PI - Math.PI / 4;
 
 const COLORS = [
   '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
@@ -23,139 +34,95 @@ const BOT_NAMES = [
   'Copperhead', 'MambaMind', 'VineSnake', 'CornSnek', 'KingCobra',
 ];
 
-function getRandomPosition(ctx: any): { x: number; y: number } {
-  return {
-    x: ctx.random() * MAP_SIZE,
-    y: ctx.random() * MAP_SIZE,
-  };
+// ============================================================
+// Helpers
+// ============================================================
+
+function normalizeAngle(angle: number): number {
+  while (angle > Math.PI) angle -= 2 * Math.PI;
+  while (angle < -Math.PI) angle += 2 * Math.PI;
+  return angle;
 }
 
-function getRandomColor(ctx: any): string {
-  return COLORS[Math.floor(ctx.random() * COLORS.length)];
+function wrapCoord(v: number): number {
+  if (v < 0) return v + MAP_SIZE;
+  if (v >= MAP_SIZE) return v - MAP_SIZE;
+  return v;
 }
 
-function getClusterFoodPositions(ctx: any, count: number): { x: number; y: number }[] {
-  const positions: { x: number; y: number }[] = [];
-  const clusterX = ctx.random() * (MAP_SIZE - 200) + 100;
-  const clusterY = ctx.random() * (MAP_SIZE - 200) + 100;
-  
-  if (ctx.random() < 0.5) {
-    const angle = ctx.random() * Math.PI * 2;
-    const spacing = 20 + ctx.random() * 15;
-    
-    for (let i = 0; i < count; i++) {
-      const offset = i * spacing;
-      positions.push({
-        x: clusterX + Math.cos(angle) * offset,
-        y: clusterY + Math.sin(angle) * offset,
-      });
-    }
-  } else {
-    for (let i = 0; i < count; i++) {
-      const angle = ctx.random() * Math.PI * 2;
-      const dist = ctx.random() * 80;
-      positions.push({
-        x: clusterX + Math.cos(angle) * dist,
-        y: clusterY + Math.sin(angle) * dist,
-      });
-    }
-  }
-  
-  return positions;
+function distSq(ax: number, ay: number, bx: number, by: number): number {
+  const dx = ax - bx;
+  const dy = ay - by;
+  return dx * dx + dy * dy;
 }
 
-function getSegmentsByOwner(ctx: any, owner: any) {
-  const allSegments = [...ctx.db.snake_segment.iter()];
-  const ownerStr = owner.toString();
-  return allSegments.filter((s: any) => {
-    const segOwnerStr = s.owner_identity.toString();
-    return segOwnerStr === ownerStr || segOwnerStr.replace('0x', '') === ownerStr.replace('0x', '');
-  }).sort((a: any, b: any) => Number(a.segment_index) - Number(b.segment_index));
-}
+// ============================================================
+// Bot AI
+// ============================================================
 
-function getBotSegments(ctx: any, botId: bigint) {
-  return [...ctx.db.bot_segment.iter()]
-    .filter((s: any) => s.bot_id === botId)
-    .sort((a: any, b: any) => Number(a.segment_index) - Number(b.segment_index));
-}
-
-function deleteSegmentsByOwner(ctx: any, owner: any) {
-  const segments = getSegmentsByOwner(ctx, owner);
-  for (const seg of segments) {
-    ctx.db.snake_segment.id.delete(seg.id);
-  }
-}
-
-function deleteBotSegments(ctx: any, botId: bigint) {
-  const segments = getBotSegments(ctx, botId);
-  for (const seg of segments) {
-    ctx.db.bot_segment.id.delete(seg.id);
-  }
-}
-
-// Bot AI: Choose direction based on food, walls, and other snakes
-function chooseBotDirection(ctx: any, bot: any, foods: any[], players: any[], bots: any[]): number {
+function chooseBotDirection(
+  bot: any,
+  foods: any[],
+  botSegmentsCache: Map<bigint, any[]>,
+  playerSegmentsCache: Map<string, any[]>,
+  allBots: any[],
+  allPlayers: any[]
+): number {
   const headX = bot.x;
   const headY = bot.y;
   const currentDir = bot.direction;
-
-  // Get bot's own segments for self-collision checking
-  const ownSegments = getBotSegments(ctx, bot.id);
+  const ownSegments = botSegmentsCache.get(bot.id) ?? [];
 
   // Find nearest food
-  let nearestFood = null;
+  let nearestFood: any = null;
   let nearestFoodDist = Infinity;
   for (const food of foods) {
-    const dist = Math.sqrt(Math.pow(food.x - headX, 2) + Math.pow(food.y - headY, 2));
-    if (dist < nearestFoodDist) {
-      nearestFoodDist = dist;
+    const d = distSq(food.x, food.y, headX, headY);
+    if (d < nearestFoodDist) {
+      nearestFoodDist = d;
       nearestFood = food;
     }
   }
 
-  // Calculate desired direction toward food as angle
   let desiredDir = currentDir;
   if (nearestFood) {
-    const dx = nearestFood.x - headX;
-    const dy = nearestFood.y - headY;
-    desiredDir = Math.atan2(dy, dx);
+    desiredDir = Math.atan2(nearestFood.y - headY, nearestFood.x - headX);
   }
 
   // Check for collisions at a given angle
   const checkCollision = (angle: number, distance: number = MOVE_SPEED * 3) => {
     const checkX = headX + Math.cos(angle) * distance;
     const checkY = headY + Math.sin(angle) * distance;
+    const collisionDistSq = 30 * 30;
 
-    // Check distance to other snakes (players and bots)
-    const checkDistance = (segments: any[], skipFirstN: number = 0) => {
-      for (const seg of segments) {
-        if (seg.segment_index < skipFirstN) continue;
-        const dist = Math.sqrt(Math.pow(seg.x - checkX, 2) + Math.pow(seg.y - checkY, 2));
-        if (dist < 30) return true;
-      }
-      return false;
-    };
-
-    // Check self-collision (skip first 4 segments: head + neck)
-    if (ownSegments.length > 4) {
-      if (checkDistance(ownSegments, 4)) {
+    // Self-collision (skip head + neck)
+    for (let i = 4; i < ownSegments.length; i++) {
+      if (distSq(ownSegments[i].x, ownSegments[i].y, checkX, checkY) < collisionDistSq) {
         return true;
       }
     }
 
-    // Check all player segments
-    for (const player of players) {
-      if (player.alive) {
-        const segments = getSegmentsByOwner(ctx, player.identity);
-        if (checkDistance(segments, 1)) return true;
+    // Player segments
+    for (const player of allPlayers) {
+      if (!player.alive) continue;
+      const segs = playerSegmentsCache.get(player.identity.toString());
+      if (!segs) continue;
+      for (let i = 1; i < segs.length; i++) {
+        if (distSq(segs[i].x, segs[i].y, checkX, checkY) < collisionDistSq) {
+          return true;
+        }
       }
     }
 
-    // Check all bot segments
-    for (const otherBot of bots) {
-      if (otherBot.id !== bot.id && otherBot.alive) {
-        const segments = getBotSegments(ctx, otherBot.id);
-        if (checkDistance(segments, 1)) return true;
+    // Other bot segments
+    for (const otherBot of allBots) {
+      if (otherBot.id === bot.id || !otherBot.alive) continue;
+      const segs = botSegmentsCache.get(otherBot.id);
+      if (!segs) continue;
+      for (let i = 1; i < segs.length; i++) {
+        if (distSq(segs[i].x, segs[i].y, checkX, checkY) < collisionDistSq) {
+          return true;
+        }
       }
     }
 
@@ -163,59 +130,42 @@ function chooseBotDirection(ctx: any, bot: any, foods: any[], players: any[], bo
   };
 
   // Try desired direction first
-  if (!checkCollision(desiredDir)) {
-    return desiredDir;
-  }
+  if (!checkCollision(desiredDir)) return desiredDir;
 
-  // Try angles at 45-degree increments from desired direction (excluding 180°)
-  const angleOffsets = [Math.PI / 2, -Math.PI / 2, Math.PI / 2, -Math.PI / 2, 3 * Math.PI / 2, -3 * Math.PI / 2];
-
-  for (const offset of angleOffsets) {
+  // Try 90° offsets (skip 180° turns)
+  for (const offset of [Math.PI / 2, -Math.PI / 2]) {
     const testAngle = desiredDir + offset;
-    // Skip if this would be a 180° turn from current direction
     const turnDiff = Math.abs(normalizeAngle(testAngle - currentDir));
     if (turnDiff > Math.PI * 0.9 && turnDiff < Math.PI * 1.1) continue;
-    if (!checkCollision(testAngle)) {
-      return testAngle;
-    }
+    if (!checkCollision(testAngle)) return testAngle;
   }
 
-  // If all directions have obstacles, look further ahead in current direction
-  // to see if we can continue straight
-  let collisionDistance = Infinity;
+  // Look ahead in current direction for imminent collision
   for (let dist = 1; dist <= 5; dist++) {
     const testX = headX + Math.cos(currentDir) * dist * MOVE_SPEED;
     const testY = headY + Math.sin(currentDir) * dist * MOVE_SPEED;
-
-    // Check self-collision at this projected position
-    if (ownSegments.length > 4) {
-      for (let i = 4; i < ownSegments.length; i++) {
-        const seg = ownSegments[i];
-        const distToSeg = Math.sqrt(Math.pow(seg.x - testX, 2) + Math.pow(seg.y - testY, 2));
-        if (distToSeg < 25) {
-          collisionDistance = dist;
-          break;
+    for (let i = 4; i < ownSegments.length; i++) {
+      if (distSq(ownSegments[i].x, ownSegments[i].y, testX, testY) < 25 * 25) {
+        if (dist <= 3) {
+          // Find any escape angle
+          for (let j = 0; j < 8; j++) {
+            const escapeAngle = (j / 8) * Math.PI * 2;
+            const turnDiff = Math.abs(normalizeAngle(escapeAngle - currentDir));
+            if (turnDiff > Math.PI * 0.9 && turnDiff < Math.PI * 1.1) continue;
+            if (!checkCollision(escapeAngle)) return escapeAngle;
+          }
         }
-      }
-    }
-    if (collisionDistance < Infinity) break;
-  }
-
-  // If collision imminent, pick any available escape angle (not 180° from current)
-  if (collisionDistance <= 3) {
-    for (let i = 0; i < 8; i++) {
-      const escapeAngle = (i / 8) * Math.PI * 2;
-      const turnDiff = Math.abs(normalizeAngle(escapeAngle - currentDir));
-      if (turnDiff > Math.PI * 0.9 && turnDiff < Math.PI * 1.1) continue;
-      if (!checkCollision(escapeAngle)) {
-        return escapeAngle;
+        break;
       }
     }
   }
 
-  // Continue in current direction
   return currentDir;
 }
+
+// ============================================================
+// Tables
+// ============================================================
 
 const Player = table(
   { name: 'player', public: true },
@@ -349,18 +299,82 @@ const spacetimedb = schema({
   game_tick: GameTick,
 });
 
+// ============================================================
+// Snake factory — creates the initial segments for a new snake
+// ============================================================
+
+type SnakeRow = {
+  // Common shape; the row's ID column is identity (player) or id (bot)
+  name: string;
+  color: string;
+  score: number;
+  length: number;
+  direction: number;
+  alive: boolean;
+  x: number;
+  y: number;
+  pending_direction: number;
+  is_dashing: boolean;
+  dash_end_time: bigint;
+  dash_cooldown_end: bigint;
+};
+
+function spawnInitialSegments(
+  ctx: any,
+  kind: 'player' | 'bot',
+  ownerKey: any,
+  dir: number,
+  pos: { x: number; y: number },
+  baseWidth: number
+) {
+  for (let i = 0; i < INITIAL_SNAKE_LENGTH; i++) {
+    const offsetX = -Math.cos(dir) * i * SEGMENT_SPACING;
+    const offsetY = -Math.sin(dir) * i * SEGMENT_SPACING;
+    if (kind === 'player') {
+      ctx.db.snake_segment.insert({
+        id: 0n,
+        owner_identity: ownerKey,
+        segment_index: i,
+        x: pos.x + offsetX,
+        y: pos.y + offsetY,
+        width: baseWidth,
+      });
+    } else {
+      ctx.db.bot_segment.insert({
+        id: 0n,
+        bot_id: ownerKey,
+        segment_index: i,
+        x: pos.x + offsetX,
+        y: pos.y + offsetY,
+        width: baseWidth,
+      });
+    }
+  }
+}
+
+function insertSnakeRow(ctx: any, kind: 'player' | 'bot', row: any): any {
+  return kind === 'player'
+    ? ctx.db.player.insert(row)
+    : ctx.db.bot.insert(row);
+}
+
+function getRandomPosition(ctx: any): { x: number; y: number } {
+  return { x: ctx.random() * MAP_SIZE, y: ctx.random() * MAP_SIZE };
+}
+
+// ============================================================
+// Reducers
+// ============================================================
+
 export const join_game = spacetimedb.reducer(
   { name: t.string(), color: t.string() },
   (ctx: any, { name, color }: { name: string; color: string }) => {
     const sender = ctx.sender;
-    
-    const existingPlayer = ctx.db.player.identity.find(sender);
-    if (existingPlayer) {
-      return;
-    }
+
+    if (ctx.db.player.identity.find(sender)) return;
 
     const pos = getRandomPosition(ctx);
-    const dir = ctx.random() * Math.PI * 2; // Random angle in radians
+    const dir = ctx.random() * Math.PI * 2;
 
     ctx.db.player.insert({
       identity: sender,
@@ -378,19 +392,7 @@ export const join_game = spacetimedb.reducer(
       dash_cooldown_end: 0n,
     });
 
-    for (let i = 0; i < INITIAL_SNAKE_LENGTH; i++) {
-      // Calculate offset using angle (opposite direction)
-      const offsetX = -Math.cos(dir) * i * SEGMENT_SPACING;
-      const offsetY = -Math.sin(dir) * i * SEGMENT_SPACING;
-      ctx.db.snake_segment.insert({
-        id: 0n,
-        owner_identity: sender,
-        segment_index: i,
-        x: pos.x + offsetX,
-        y: pos.y + offsetY,
-        width: 18.0,
-      });
-    }
+    spawnInitialSegments(ctx, 'player', sender, dir, pos, 18.0);
 
     ctx.db.player_joined_event.insert({
       identity: sender,
@@ -405,87 +407,56 @@ export const join_game = spacetimedb.reducer(
 export const change_direction = spacetimedb.reducer(
   { direction: t.f32() },
   (ctx: any, { direction }: { direction: number }) => {
-    const sender = ctx.sender;
-    const player = ctx.db.player.identity.find(sender);
+    const player = ctx.db.player.identity.find(ctx.sender);
+    if (!player || !player.alive) return;
 
-    if (!player || !player.alive) {
-      return;
+    // Clamp to max allowed turn (no 180° flips)
+    let angleDiff = normalizeAngle(direction - player.direction);
+    if (Math.abs(angleDiff) > MAX_TURN_ANGLE) {
+      angleDiff = angleDiff > 0 ? MAX_TURN_ANGLE : -MAX_TURN_ANGLE;
+      direction = player.direction + angleDiff;
     }
 
-    // Prevent 180° turns - clamp to nearest allowed angle (90° dead zone)
-    const currentDir = player.direction;
-    let angleDiff = normalizeAngle(direction - currentDir);
-    const deadZoneHalf = Math.PI / 4; // 45° in radians (90° total dead zone = max 135° turn)
-    const reverseAngle = Math.PI; // 180°
-    const maxTurnAngle = reverseAngle - deadZoneHalf; // 135° = max allowed turn
-    
-    if (Math.abs(angleDiff) > maxTurnAngle) {
-      // Clamp to max allowed turn angle
-      angleDiff = angleDiff > 0 ? maxTurnAngle : -maxTurnAngle;
-      direction = currentDir + angleDiff;
-    }
-
-    player.pending_direction = direction;
     ctx.db.player.identity.update({ ...player, pending_direction: direction });
   }
 );
 
-const DASH_DURATION_MS = 500n;
-const DASH_COOLDOWN_MS = 2500n;
-const DASH_MULTIPLIER = 3;
+export const activateDash = spacetimedb.reducer((ctx: any) => {
+  const player = ctx.db.player.identity.find(ctx.sender);
+  if (!player || !player.alive || player.is_dashing) return;
 
-export const activateDash = spacetimedb.reducer(
-  (ctx: any) => {
-    const sender = ctx.sender;
-    const player = ctx.db.player.identity.find(sender);
+  const now = BigInt(Date.now());
+  if (now < player.dash_cooldown_end) return;
 
-    if (!player || !player.alive) {
-      return;
-    }
+  ctx.db.player.identity.update({
+    ...player,
+    is_dashing: true,
+    dash_end_time: now + DASH_DURATION_MS,
+    dash_cooldown_end: now + DASH_DURATION_MS + DASH_COOLDOWN_MS,
+  });
+});
 
-    if (player.is_dashing) {
-      return;
-    }
+export const leave_game = spacetimedb.reducer((ctx: any) => {
+  const player = ctx.db.player.identity.find(ctx.sender);
+  if (!player) return;
 
-    const now = BigInt(Date.now());
-    if (now < player.dash_cooldown_end) {
-      return;
-    }
-
-    ctx.db.player.identity.update({
-      ...player,
-      is_dashing: true,
-      dash_end_time: now + DASH_DURATION_MS,
-      dash_cooldown_end: now + DASH_DURATION_MS + DASH_COOLDOWN_MS,
-    });
-  }
-);
-
-// Normalize angle to [-π, π]
-function normalizeAngle(angle: number): number {
-  while (angle > Math.PI) angle -= 2 * Math.PI;
-  while (angle < -Math.PI) angle += 2 * Math.PI;
-  return angle;
-}
-
-export const leave_game = spacetimedb.reducer(
-  (ctx: any) => {
-    const sender = ctx.sender;
-    const player = ctx.db.player.identity.find(sender);
-    
-    if (player) {
-      deleteSegmentsByOwner(ctx, sender);
-      ctx.db.player.identity.delete(sender);
+  for (const seg of ctx.db.snake_segment.iter()) {
+    if (seg.owner_identity.isEqual(ctx.sender)) {
+      ctx.db.snake_segment.id.delete(seg.id);
     }
   }
-);
+  ctx.db.player.identity.delete(ctx.sender);
+});
 
-// Spawn a bot snake
+// ============================================================
+// Bot spawning
+// ============================================================
+
 function spawnBot(ctx: any) {
   const pos = getRandomPosition(ctx);
-  const dir = ctx.random() * Math.PI * 2; // Random angle in radians
+  const dir = ctx.random() * Math.PI * 2;
   const name = BOT_NAMES[Math.floor(ctx.random() * BOT_NAMES.length)];
-  const color = getRandomColor(ctx);
+  const color = COLORS[Math.floor(ctx.random() * COLORS.length)];
 
   const bot = ctx.db.bot.insert({
     id: 0n,
@@ -503,775 +474,440 @@ function spawnBot(ctx: any) {
     dash_cooldown_end: 0n,
   });
 
-  for (let i = 0; i < INITIAL_SNAKE_LENGTH; i++) {
-    // Calculate offset using angle (opposite direction)
-    const offsetX = -Math.cos(dir) * i * SEGMENT_SPACING;
-    const offsetY = -Math.sin(dir) * i * SEGMENT_SPACING;
-    ctx.db.bot_segment.insert({
-      id: 0n,
-      bot_id: bot.id,
-      segment_index: i,
-      x: pos.x + offsetX,
-      y: pos.y + offsetY,
-      width: 14.0,
-    });
-  }
-
+  spawnInitialSegments(ctx, 'bot', bot.id, dir, pos, 14.0);
   return bot;
 }
+
+function spawnInitialFood(ctx: any, count: number) {
+  for (let i = 0; i < count; i++) {
+    const pos = getRandomPosition(ctx);
+    ctx.db.food.insert({
+      id: 0n,
+      x: pos.x,
+      y: pos.y,
+      color: COLORS[Math.floor(ctx.random() * COLORS.length)],
+    });
+  }
+}
+
+function getClusterFoodPositions(ctx: any, count: number): { x: number; y: number }[] {
+  const positions: { x: number; y: number }[] = [];
+  const clusterX = ctx.random() * (MAP_SIZE - 200) + 100;
+  const clusterY = ctx.random() * (MAP_SIZE - 200) + 100;
+
+  if (ctx.random() < 0.5) {
+    const angle = ctx.random() * Math.PI * 2;
+    const spacing = 20 + ctx.random() * 15;
+    for (let i = 0; i < count; i++) {
+      const offset = i * spacing;
+      positions.push({
+        x: clusterX + Math.cos(angle) * offset,
+        y: clusterY + Math.sin(angle) * offset,
+      });
+    }
+  } else {
+    for (let i = 0; i < count; i++) {
+      const angle = ctx.random() * Math.PI * 2;
+      const dist = ctx.random() * 80;
+      positions.push({
+        x: clusterX + Math.cos(angle) * dist,
+        y: clusterY + Math.sin(angle) * dist,
+      });
+    }
+  }
+
+  return positions;
+}
+
+// ============================================================
+// Snake death — collapses 5 copies of the same cleanup
+// ============================================================
+
+function killSnake(
+  ctx: any,
+  kind: 'player' | 'bot',
+  snake: any,
+  segments: any[],
+  killerName: string
+) {
+  if (kind === 'player') {
+    ctx.db.player_died_event.insert({ identity: snake.identity, killer_name: killerName });
+    ctx.db.player.identity.update({ ...snake, alive: false, score: 0 });
+  } else {
+    ctx.db.bot_died_event.insert({ bot_id: snake.id, killer_name: killerName });
+    ctx.db.bot.id.update({ ...snake, alive: false, score: 0 });
+  }
+
+  // Drop every third segment as food, delete the rest
+  for (let i = 0; i < segments.length; i++) {
+    if (i % 3 === 0) {
+      ctx.db.food.insert({ id: 0n, x: segments[i].x, y: segments[i].y, color: '#FF6B6B' });
+    }
+    if (kind === 'player') {
+      ctx.db.snake_segment.id.delete(segments[i].id);
+    } else {
+      ctx.db.bot_segment.id.delete(segments[i].id);
+    }
+  }
+}
+
+// ============================================================
+// Shared snake movement (used by both player and bot branches)
+// ============================================================
+
+interface MoveContext {
+  ctx: any;
+  now: bigint;
+  foods: any[];
+  playerSegments: Map<string, any[]>;
+  botSegments: Map<bigint, any[]>;
+  alivePlayers: any[];
+  aliveBots: any[];
+}
+
+function moveSnake(
+  mc: MoveContext,
+  kind: 'player' | 'bot',
+  snake: any
+): void {
+  // 1. Clamp direction to max allowed turn
+  let newDir = snake.pending_direction;
+  let angleDiff = normalizeAngle(newDir - snake.direction);
+  if (Math.abs(angleDiff) > MAX_TURN_ANGLE) {
+    angleDiff = angleDiff > 0 ? MAX_TURN_ANGLE : -MAX_TURN_ANGLE;
+    newDir = snake.direction + angleDiff;
+  }
+  snake.pending_direction = newDir;
+
+  // 2. Dash state
+  let currentSpeed = MOVE_SPEED;
+  let isDashing = snake.is_dashing;
+  let newCooldownEnd = snake.dash_cooldown_end;
+  if (isDashing && mc.now >= snake.dash_end_time) {
+    isDashing = false;
+    newCooldownEnd = mc.now + DASH_COOLDOWN_MS;
+  } else if (isDashing) {
+    currentSpeed *= DASH_MULTIPLIER;
+  }
+
+  // 3. Move head
+  const newX = wrapCoord(snake.x + Math.cos(newDir) * currentSpeed);
+  const newY = wrapCoord(snake.y + Math.sin(newDir) * currentSpeed);
+
+  // 4. Look up segments from the per-tick cache
+  const segments =
+    kind === 'player'
+      ? mc.playerSegments.get(snake.identity.toString()) ?? []
+      : mc.botSegments.get(snake.id) ?? [];
+
+  // 5. Food collision
+  const headSegment = segments.find((s: any) => s.segment_index === 0);
+  const headCollisionRadius =
+    kind === 'player' ? (headSegment ? Number(headSegment.width) : 18) * 0.8 : 22;
+  let ateFood = false;
+  let foodIndex = -1;
+  for (let i = 0; i < mc.foods.length; i++) {
+    if (distSq(mc.foods[i].x, mc.foods[i].y, newX, newY) < headCollisionRadius * headCollisionRadius) {
+      foodIndex = i;
+      ateFood = true;
+      break;
+    }
+  }
+  if (ateFood) {
+    snake.score += 10;
+    snake.length += 1;
+  }
+
+  // 6. Move each segment to the position of the one in front
+  const newSegmentPositions: { x: number; y: number }[] = [];
+  let prevX = newX;
+  let prevY = newY;
+  for (const segment of segments) {
+    const tempX = segment.x;
+    const tempY = segment.y;
+    newSegmentPositions.push({ x: prevX, y: prevY });
+    if (kind === 'player') {
+      mc.ctx.db.snake_segment.id.update({ ...segment, x: prevX, y: prevY });
+    } else {
+      mc.ctx.db.bot_segment.id.update({ ...segment, x: prevX, y: prevY });
+    }
+    prevX = tempX;
+    prevY = tempY;
+  }
+
+  // 7. Grow on eat — widen head + append new tail segment at the vacated spot
+  if (ateFood && foodIndex >= 0) {
+    const food = mc.foods[foodIndex];
+    if (kind === 'player') {
+      mc.ctx.db.food.id.delete(food.id);
+      mc.ctx.db.snake_segment.id.update({
+        ...headSegment,
+        x: newSegmentPositions[0]?.x ?? newX,
+        y: newSegmentPositions[0]?.y ?? newY,
+        width: headSegment.width + 0.08,
+      });
+      const tail = segments[segments.length - 1];
+      if (tail) {
+        mc.ctx.db.snake_segment.insert({
+          id: 0n,
+          owner_identity: snake.identity,
+          segment_index: Number(tail.segment_index) + 1,
+          x: prevX,
+          y: prevY,
+          width: 18.0,
+        });
+      }
+    } else {
+      mc.ctx.db.food.id.delete(food.id);
+      mc.ctx.db.bot_segment.id.update({
+        ...headSegment,
+        x: newSegmentPositions[0]?.x ?? newX,
+        y: newSegmentPositions[0]?.y ?? newY,
+        width: headSegment.width + 0.08,
+      });
+      const tail = segments[segments.length - 1];
+      if (tail) {
+        mc.ctx.db.bot_segment.insert({
+          id: 0n,
+          bot_id: snake.id,
+          segment_index: Number(tail.segment_index) + 1,
+          x: prevX,
+          y: prevY,
+          width: 18.0,
+        });
+      }
+    }
+  }
+
+  // 8. Collisions — check all other snakes, then self
+  const collisionDistSq = 15 * 15;
+  const headOnDistSq = 20 * 20;
+  let killerName: string | null = null;
+  let headOnWinner: 'self' | 'other' | null = null;
+
+  // Other players
+  for (const other of mc.alivePlayers) {
+    if (kind === 'player' && other.identity === snake.identity) continue;
+    const otherSegs = mc.playerSegments.get(other.identity.toString());
+    if (!otherSegs) continue;
+    for (const seg of otherSegs) {
+      if (distSq(seg.x, seg.y, newX, newY) >= collisionDistSq) continue;
+      if (seg.segment_index === 0 && distSq(seg.x, seg.y, newX, newY) < headOnDistSq) {
+        // Head-on — bigger snake wins, equal kills both (each finds the other in its own moveSnake call)
+        if (kind === 'player') {
+          if (snake.length > other.length) continue;       // we win, the other dies in their own tick
+          killerName = other.name;
+          break;
+        } else {
+          killerName = other.name;
+          break;
+        }
+      } else {
+        killerName = other.name; break;
+      }
+    }
+    if (killerName) break;
+  }
+
+  // Other bots
+  if (!killerName) {
+    for (const otherBot of mc.aliveBots) {
+      if (kind === 'bot' && otherBot.id === snake.id) continue;
+      const otherSegs = mc.botSegments.get(otherBot.id);
+      if (!otherSegs) continue;
+      for (const seg of otherSegs) {
+        if (distSq(seg.x, seg.y, newX, newY) < collisionDistSq) {
+          killerName = otherBot.name;
+          break;
+        }
+      }
+      if (killerName) break;
+    }
+  }
+
+  // Self-collision (skip head + neck)
+  if (!killerName) {
+    for (let i = 3; i < newSegmentPositions.length; i++) {
+      if (distSq(newSegmentPositions[i].x, newSegmentPositions[i].y, newX, newY) < 100) {
+        killerName = kind === 'player' ? 'yourself' : 'itself';
+        break;
+      }
+    }
+  }
+
+  if (killerName) {
+    killSnake(mc.ctx, kind, snake, segments, killerName);
+    // Drop from the per-tick cache so subsequent moveSnake calls in this
+    // tick don't see this snake's segments as a collision target.
+    if (kind === 'player') {
+      mc.playerSegments.delete(snake.identity.toString());
+    } else {
+      mc.botSegments.delete(snake.id);
+    }
+    return;
+  }
+
+  // 9. Survived — update position
+  if (kind === 'player') {
+    mc.ctx.db.player.identity.update({
+      ...snake,
+      x: newX,
+      y: newY,
+      direction: newDir,
+      is_dashing: isDashing,
+      dash_cooldown_end: newCooldownEnd,
+    });
+  } else {
+    mc.ctx.db.bot.id.update({
+      ...snake,
+      x: newX,
+      y: newY,
+      direction: newDir,
+      is_dashing: isDashing,
+      dash_cooldown_end: newCooldownEnd,
+    });
+  }
+}
+
+// ============================================================
+// Tick reducer
+// ============================================================
 
 tickReducer = spacetimedb.reducer(
   { timer: GameTick.rowType },
   (ctx: any, _args: any) => {
-    const foods = [...ctx.db.food.iter()];
-    const players = [...ctx.db.player.iter()].filter((p: any) => p.alive);
-    const bots = [...ctx.db.bot.iter()].filter((b: any) => b.alive);
     const now = BigInt(Date.now());
-    
+    const foods = [...ctx.db.food.iter()];
+    const alivePlayers = [...ctx.db.player.iter()].filter((p: any) => p.alive);
+    const aliveBots = [...ctx.db.bot.iter()].filter((b: any) => b.alive);
+
+    // Per-tick segment cache — built once, used by every collision check.
+    // This is the dominant perf fix: replaces O(N² × M) full-table scans
+    // with O(N) build + O(1) lookups.
+    const playerSegments = new Map<string, any[]>();
+    for (const seg of ctx.db.snake_segment.iter()) {
+      const key = seg.owner_identity.toString();
+      let list = playerSegments.get(key);
+      if (!list) {
+        list = [];
+        playerSegments.set(key, list);
+      }
+      list.push(seg);
+    }
+    for (const list of playerSegments.values()) {
+      list.sort((a: any, b: any) => Number(a.segment_index) - Number(b.segment_index));
+    }
+
+    const botSegments = new Map<bigint, any[]>();
+    for (const seg of ctx.db.bot_segment.iter()) {
+      let list = botSegments.get(seg.bot_id);
+      if (!list) {
+        list = [];
+        botSegments.set(seg.bot_id, list);
+      }
+      list.push(seg);
+    }
+    for (const list of botSegments.values()) {
+      list.sort((a: any, b: any) => Number(a.segment_index) - Number(b.segment_index));
+    }
+
+    const mc: MoveContext = { ctx, now, foods, playerSegments, botSegments, alivePlayers, aliveBots };
+
     // Move players
-    for (const player of players) {
-      let newDir = player.pending_direction;
-
-      // Prevent 180° turns - clamp to nearest allowed angle (90° dead zone)
-      const currentDir = player.direction;
-      let angleDiff = normalizeAngle(newDir - currentDir);
-      const deadZoneHalf = Math.PI / 4; // 45° in radians
-      const reverseAngle = Math.PI;
-      const maxTurnAngle = reverseAngle - deadZoneHalf; // 135° = max allowed turn
-      
-      if (Math.abs(angleDiff) > maxTurnAngle) {
-        // Clamp to max allowed turn angle
-        angleDiff = angleDiff > 0 ? maxTurnAngle : -maxTurnAngle;
-        newDir = currentDir + angleDiff;
-      }
-
-      // Save the clamped direction back to pending_direction so it persists
-      player.pending_direction = newDir;
-
-      // Check and update dash state
-      let currentSpeed = MOVE_SPEED;
-      let isDashing = player.is_dashing;
-      let newCooldownEnd = player.dash_cooldown_end;
-      if (player.is_dashing && now >= player.dash_end_time) {
-        isDashing = false;
-        newCooldownEnd = now + DASH_COOLDOWN_MS;
-      } else if (player.is_dashing) {
-        currentSpeed = MOVE_SPEED * DASH_MULTIPLIER;
-      }
-
-      // Calculate movement using angle in radians
-      const dx = Math.cos(newDir) * currentSpeed;
-      const dy = Math.sin(newDir) * currentSpeed;
-
-      let newX = player.x + dx;
-      let newY = player.y + dy;
-
-      if (newX < 0) newX += MAP_SIZE;
-      if (newX >= MAP_SIZE) newX -= MAP_SIZE;
-      if (newY < 0) newY += MAP_SIZE;
-      if (newY >= MAP_SIZE) newY -= MAP_SIZE;
-
-      const segments = getSegmentsByOwner(ctx, player.identity);
-      const headSegment = segments.find((s: any) => s.segment_index === 0);
-
-      // Check food collision BEFORE moving segments
-      // Collision radius grows with head size to match visual representation
-      // Head width grows by 0.08 per food eaten, base width is 18
-      const headWidth = headSegment ? Number(headSegment.width) : 18;
-      const headCollisionRadius = headWidth * 0.8;
-      let ateFood = false;
-      let foodIndex = -1;
-      for (let i = 0; i < foods.length; i++) {
-        const food = foods[i];
-        const dist = Math.sqrt(
-          Math.pow(food.x - newX, 2) + Math.pow(food.y - newY, 2)
-        );
-        if (dist < headCollisionRadius) {
-          foodIndex = i;
-          player.score += 10;
-          player.length += 1;
-          ateFood = true;
-          break;
-        }
-      }
-
-      // Track new segment positions for collision detection
-      // Each segment moves to where the previous one was
-      const newSegmentPositions: { index: number; x: number; y: number }[] = [];
-
-      let prevX = newX;
-      let prevY = newY;
-
-      for (const segment of segments) {
-        const tempX = segment.x;
-        const tempY = segment.y;
-        const newSegX = prevX;
-        const newSegY = prevY;
-
-        newSegmentPositions.push({ index: segment.segment_index, x: newSegX, y: newSegY });
-
-        ctx.db.snake_segment.id.update({
-          ...segment,
-          x: newSegX,
-          y: newSegY,
-        });
-        prevX = tempX;
-        prevY = tempY;
-      }
-
-      // Handle growth after movement
-      if (ateFood && foodIndex >= 0) {
-        const food = foods[foodIndex];
-        ctx.db.food.id.delete(food.id);
-
-        // Get the UPDATED head segment (not the old one from segments array)
-        const updatedSegments = getSegmentsByOwner(ctx, player.identity);
-        const headSegment = updatedSegments.find((s: any) => s.segment_index === 0);
-        if (headSegment) {
-          ctx.db.snake_segment.id.update({
-            ...headSegment,
-            width: headSegment.width + 0.08,
-          });
-        }
-
-        const lastSegment = updatedSegments[updatedSegments.length - 1];
-
-        if (lastSegment) {
-          // Insert new segment at the position the tail just vacated
-          // prevX/prevY now hold the last segment's old position
-          ctx.db.snake_segment.insert({
-            id: 0n,
-            owner_identity: player.identity,
-            segment_index: Number(lastSegment.segment_index) + 1,
-            x: prevX,
-            y: prevY,
-            width: 18.0,
-          });
-        }
-      }
-
-      // Check collision with other players
-      for (const other of players) {
-        if (other.identity === player.identity) continue;
-        const otherSegments = getSegmentsByOwner(ctx, other.identity);
-        const otherHead = otherSegments.find((s: any) => s.segment_index === 0);
-        
-        for (const segment of otherSegments) {
-          const dist = Math.sqrt(
-            Math.pow(segment.x - newX, 2) + Math.pow(segment.y - newY, 2)
-          );
-          if (dist < 15) {
-            // Check if this is a head-on-head collision
-            if (segment.segment_index === 0 && otherHead && dist < 20) {
-              // Head-on collision: bigger snake wins (compare lengths)
-              if (player.length > other.length) {
-                // This player is bigger, kill the other
-                continue; // Skip killing this player, we'll kill the other below
-              } else if (player.length < other.length) {
-                // Other player is bigger, this player dies
-                player.alive = false;
-                player.score = 0;
-                
-                ctx.db.player_died_event.insert({
-                  identity: player.identity,
-                  killer_name: other.name,
-                });
-                
-                ctx.db.player.identity.update({
-                  ...player,
-                  alive: false,
-                  score: 0,
-                });
-                
-                const playerSegments = getSegmentsByOwner(ctx, player.identity);
-                let segIndex = 0;
-                for (const seg of playerSegments) {
-                  if (segIndex % 3 === 0) {
-                    ctx.db.food.insert({
-                      id: 0n,
-                      x: seg.x,
-                      y: seg.y,
-                      color: '#FF6B6B',
-                    });
-                  }
-                  ctx.db.snake_segment.id.delete(seg.id);
-                  segIndex++;
-                }
-                break;
-              } else {
-                // Equal length: both die
-                player.alive = false;
-                player.score = 0;
-                
-                ctx.db.player_died_event.insert({
-                  identity: player.identity,
-                  killer_name: other.name,
-                });
-                
-                ctx.db.player.identity.update({
-                  ...player,
-                  alive: false,
-                  score: 0,
-                });
-                
-                const playerSegments = getSegmentsByOwner(ctx, player.identity);
-                let segIndex = 0;
-                for (const seg of playerSegments) {
-                  if (segIndex % 3 === 0) {
-                    ctx.db.food.insert({
-                      id: 0n,
-                      x: seg.x,
-                      y: seg.y,
-                      color: '#FF6B6B',
-                    });
-                  }
-                  ctx.db.snake_segment.id.delete(seg.id);
-                  segIndex++;
-                }
-                break;
-              }
-            } else {
-              // Not a head-on collision, normal collision rules apply
-              player.alive = false;
-              player.score = 0;
-
-              ctx.db.player_died_event.insert({
-                identity: player.identity,
-                killer_name: other.name,
-              });
-
-              ctx.db.player.identity.update({
-                ...player,
-                alive: false,
-                score: 0,
-              });
-
-              const playerSegments = getSegmentsByOwner(ctx, player.identity);
-              let segIndex = 0;
-              for (const seg of playerSegments) {
-                if (segIndex % 3 === 0) {
-                  ctx.db.food.insert({
-                    id: 0n,
-                    x: seg.x,
-                    y: seg.y,
-                    color: '#FF6B6B',
-                  });
-                }
-                ctx.db.snake_segment.id.delete(seg.id);
-                segIndex++;
-              }
-              break;
-            }
-          }
-        }
-        if (!player.alive) break;
-      }
-
-      // Check collision with bots
-      if (player.alive) {
-        for (const bot of bots) {
-          const botSegments = getBotSegments(ctx, bot.id);
-          for (const segment of botSegments) {
-            const dist = Math.sqrt(
-              Math.pow(segment.x - newX, 2) + Math.pow(segment.y - newY, 2)
-            );
-            if (dist < 15) {
-              player.alive = false;
-              player.score = 0;
-              
-              ctx.db.player_died_event.insert({
-                identity: player.identity,
-                killer_name: bot.name,
-              });
-              
-              ctx.db.player.identity.update({
-                ...player,
-                alive: false,
-                score: 0,
-              });
-              
-              const playerSegments = getSegmentsByOwner(ctx, player.identity);
-              let segIndex = 0;
-              for (const seg of playerSegments) {
-                if (segIndex % 3 === 0) {
-                  ctx.db.food.insert({
-                    id: 0n,
-                    x: seg.x,
-                    y: seg.y,
-                    color: '#FF6B6B',
-                  });
-                }
-                ctx.db.snake_segment.id.delete(seg.id);
-                segIndex++;
-              }
-              break;
-            }
-          }
-          if (!player.alive) break;
-        }
-      }
-
-      // Check self-collision (crash into own body) using NEW segment positions
-      if (player.alive) {
-        // Skip the first few segments (head and neck) to avoid false positives
-        // Start checking from segment 3 onwards
-        for (let i = 3; i < newSegmentPositions.length; i++) {
-          const segment = newSegmentPositions[i];
-          const dist = Math.sqrt(
-            Math.pow(segment.x - newX, 2) + Math.pow(segment.y - newY, 2)
-          );
-          if (dist < 10) { // Reduced radius for more accurate collision
-            player.alive = false;
-            player.score = 0;
-
-            ctx.db.player_died_event.insert({
-              identity: player.identity,
-              killer_name: 'yourself',
-            });
-
-            ctx.db.player.identity.update({
-              ...player,
-              alive: false,
-              score: 0,
-            });
-
-            const playerSegments = getSegmentsByOwner(ctx, player.identity);
-            let segIndex = 0;
-            for (const seg of playerSegments) {
-              if (segIndex % 3 === 0) {
-                ctx.db.food.insert({
-                  id: 0n,
-                  x: seg.x,
-                  y: seg.y,
-                  color: '#FF6B6B',
-                });
-              }
-              ctx.db.snake_segment.id.delete(seg.id);
-              segIndex++;
-            }
-            break;
-          }
-        }
-      }
-
-      if (player.alive) {
-        ctx.db.player.identity.update({
-          ...player,
-          x: newX,
-          y: newY,
-          direction: newDir,
-          is_dashing: isDashing,
-          dash_cooldown_end: newCooldownEnd,
-        });
-      }
+    for (const player of alivePlayers) {
+      moveSnake(mc, 'player', player);
     }
 
-    // Move bots with AI
-    for (const bot of bots) {
-      // Choose direction using AI
-      let newDir = chooseBotDirection(ctx, bot, foods, players, bots);
+    // Move bots — refresh filter so we skip players that just died this tick
+    for (const bot of aliveBots) {
+      if (!bot.alive) continue;
+      // Bot decides its own direction via AI
+      bot.pending_direction = chooseBotDirection(
+        bot,
+        foods,
+        botSegments,
+        playerSegments,
+        aliveBots.filter((b: any) => b.alive),
+        alivePlayers.filter((p: any) => p.alive)
+      );
 
-      // Prevent 180° turns - clamp to nearest allowed angle (90° dead zone)
-      const currentDir = bot.direction;
-      let angleDiff = normalizeAngle(newDir - currentDir);
-      const deadZoneHalf = Math.PI / 4; // 45° in radians
-      const reverseAngle = Math.PI;
-      const maxTurnAngle = reverseAngle - deadZoneHalf; // 135° = max allowed turn
-      
-      if (Math.abs(angleDiff) > maxTurnAngle) {
-        // Clamp to max allowed turn angle
-        angleDiff = angleDiff > 0 ? maxTurnAngle : -maxTurnAngle;
-        newDir = currentDir + angleDiff;
-      }
-
-      bot.pending_direction = newDir;
-
-      // Bot AI dash logic: randomly dash when cooldown is ready
+      // Bot sometimes dashes
       if (!bot.is_dashing && now >= bot.dash_cooldown_end && ctx.random() < 0.15) {
-        ctx.db.bot.id.update({
-          ...bot,
-          is_dashing: true,
-          dash_end_time: now + DASH_DURATION_MS,
-          dash_cooldown_end: now + DASH_DURATION_MS + DASH_COOLDOWN_MS,
-        });
+        bot.is_dashing = true;
+        bot.dash_end_time = now + DASH_DURATION_MS;
+        bot.dash_cooldown_end = now + DASH_DURATION_MS + DASH_COOLDOWN_MS;
       }
 
-      // Check and update dash state
-      let currentSpeed = MOVE_SPEED;
-      let botIsDashing = bot.is_dashing;
-      let botNewCooldownEnd = bot.dash_cooldown_end;
-      if (bot.is_dashing && now >= bot.dash_end_time) {
-        botIsDashing = false;
-        botNewCooldownEnd = now + DASH_COOLDOWN_MS;
-      } else if (bot.is_dashing) {
-        currentSpeed = MOVE_SPEED * DASH_MULTIPLIER;
-      }
-
-      // Calculate movement using angle in radians
-      const dx = Math.cos(newDir) * currentSpeed;
-      const dy = Math.sin(newDir) * currentSpeed;
-
-      let newX = bot.x + dx;
-      let newY = bot.y + dy;
-
-      if (newX < 0) newX += MAP_SIZE;
-      if (newX >= MAP_SIZE) newX -= MAP_SIZE;
-      if (newY < 0) newY += MAP_SIZE;
-      if (newY >= MAP_SIZE) newY -= MAP_SIZE;
-
-      const segments = getBotSegments(ctx, bot.id);
-
-      // Check food collision BEFORE moving segments
-      // Use larger collision radius to account for bigger head (base width 18 + head size increase)
-      const headCollisionRadius = 22;
-      let ateFood = false;
-      let foodIndex = -1;
-      for (let i = 0; i < foods.length; i++) {
-        const food = foods[i];
-        const dist = Math.sqrt(
-          Math.pow(food.x - newX, 2) + Math.pow(food.y - newY, 2)
-        );
-        if (dist < headCollisionRadius) {
-          foodIndex = i;
-          bot.score += 10;
-          bot.length += 1;
-          ateFood = true;
-          break;
-        }
-      }
-
-      // Track new segment positions for collision detection
-      const newSegmentPositions: { index: number; x: number; y: number }[] = [];
-
-      let prevX = newX;
-      let prevY = newY;
-
-      for (const segment of segments) {
-        const tempX = segment.x;
-        const tempY = segment.y;
-        const newSegX = prevX;
-        const newSegY = prevY;
-
-        newSegmentPositions.push({ index: segment.segment_index, x: newSegX, y: newSegY });
-
-        ctx.db.bot_segment.id.update({
-          ...segment,
-          x: newSegX,
-          y: newSegY,
-        });
-        prevX = tempX;
-        prevY = tempY;
-      }
-
-      // Handle growth after movement
-      if (ateFood && foodIndex >= 0) {
-        const food = foods[foodIndex];
-        ctx.db.food.id.delete(food.id);
-
-        // Get the UPDATED segments (not the old ones)
-        const updatedSegments = getBotSegments(ctx, bot.id);
-        const headSegment = updatedSegments.find((s: any) => s.segment_index === 0);
-        if (headSegment) {
-          ctx.db.bot_segment.id.update({
-            ...headSegment,
-            width: headSegment.width + 0.08,
-          });
-        }
-
-        const lastSegment = updatedSegments[updatedSegments.length - 1];
-
-        if (lastSegment) {
-          // Insert new segment at the position the tail just vacated
-          // prevX/prevY now hold the last segment's old position
-          ctx.db.bot_segment.insert({
-            id: 0n,
-            bot_id: bot.id,
-            segment_index: Number(lastSegment.segment_index) + 1,
-            x: prevX,
-            y: prevY,
-            width: 18.0,
-          });
-        }
-      }
-
-      // Check collision with players
-      let killedBy = null;
-      for (const player of players) {
-        const playerSegments = getSegmentsByOwner(ctx, player.identity);
-        for (const segment of playerSegments) {
-          const dist = Math.sqrt(
-            Math.pow(segment.x - newX, 2) + Math.pow(segment.y - newY, 2)
-          );
-          if (dist < 15) {
-            bot.alive = false;
-            bot.score = 0;
-            killedBy = player.name;
-            break;
-          }
-        }
-        if (!bot.alive) break;
-      }
-
-      // Check collision with other bots
-      if (bot.alive) {
-        for (const otherBot of bots) {
-          if (otherBot.id === bot.id) continue;
-          const otherSegments = getBotSegments(ctx, otherBot.id);
-          for (const segment of otherSegments) {
-            const dist = Math.sqrt(
-              Math.pow(segment.x - newX, 2) + Math.pow(segment.y - newY, 2)
-            );
-            if (dist < 15) {
-              bot.alive = false;
-              bot.score = 0;
-              killedBy = otherBot.name;
-              break;
-            }
-          }
-          if (!bot.alive) break;
-        }
-      }
-
-      // Check self-collision (bots crashing into their own body) using NEW segment positions
-      if (bot.alive) {
-        // Skip the first few segments (head and neck) to avoid false positives
-        for (let i = 3; i < newSegmentPositions.length; i++) {
-          const segment = newSegmentPositions[i];
-          const dist = Math.sqrt(
-            Math.pow(segment.x - newX, 2) + Math.pow(segment.y - newY, 2)
-          );
-          if (dist < 10) { // Reduced radius for more accurate collision
-            bot.alive = false;
-            bot.score = 0;
-            killedBy = 'itself';
-            break;
-          }
-        }
-      }
-
-      if (!bot.alive) {
-        ctx.db.bot_died_event.insert({
-          bot_id: bot.id,
-          killer_name: killedBy || 'Unknown',
-        });
-        
-        ctx.db.bot.id.update({
-          ...bot,
-          alive: false,
-          score: 0,
-        });
-        
-        // Convert dead bot's segments to food (every 3rd segment)
-        let segIndex = 0;
-        for (const seg of segments) {
-          if (segIndex % 3 === 0) {
-            ctx.db.food.insert({
-              id: 0n,
-              x: seg.x,
-              y: seg.y,
-              color: '#FF6B6B',
-            });
-          }
-          ctx.db.bot_segment.id.delete(seg.id);
-          segIndex++;
-        }
-      } else {
-        ctx.db.bot.id.update({
-          ...bot,
-          x: newX,
-          y: newY,
-          direction: newDir,
-          is_dashing: botIsDashing,
-          dash_cooldown_end: botNewCooldownEnd,
-        });
-      }
+      moveSnake(mc, 'bot', bot);
     }
 
-    // Spawn food
+    // Top up food
     const foodCount = Number(ctx.db.food.count());
     if (foodCount < MAX_FOOD) {
       const clusterSize = Math.min(3 + Math.floor(ctx.random() * 6), MAX_FOOD - foodCount);
-      const positions = getClusterFoodPositions(ctx, clusterSize);
-      for (const pos of positions) {
+      for (const pos of getClusterFoodPositions(ctx, clusterSize)) {
         ctx.db.food.insert({
           id: 0n,
           x: pos.x,
           y: pos.y,
-          color: getRandomColor(ctx),
+          color: COLORS[Math.floor(ctx.random() * COLORS.length)],
         });
       }
     }
-    
-    // Clean up dead players
-    const allPlayers = [...ctx.db.player.iter()];
-    for (const player of allPlayers) {
-      if (!player.alive) {
-        const segments = getSegmentsByOwner(ctx, player.identity);
-        for (const seg of segments) {
-          ctx.db.snake_segment.id.delete(seg.id);
-        }
-        ctx.db.player.identity.delete(player.identity);
-      }
-    }
 
-    // Clean up dead bots
-    const allBots = [...ctx.db.bot.iter()];
-    for (const bot of allBots) {
-      if (!bot.alive) {
-        deleteBotSegments(ctx, bot.id);
-        ctx.db.bot.id.delete(bot.id);
-      }
-    }
-
-    // Spawn new bots if needed to maintain minimum snake count
-    const totalSnakes = [...ctx.db.player.iter()].filter((p: any) => p.alive).length + 
-                        [...ctx.db.bot.iter()].filter((b: any) => b.alive).length;
-    
-    if (totalSnakes < MIN_SNAKES) {
-      const botsToSpawn = MIN_SNAKES - totalSnakes;
-      for (let i = 0; i < botsToSpawn; i++) {
-        spawnBot(ctx);
-      }
+    // Maintain minimum snake count
+    const livePlayerCount = alivePlayers.filter((p: any) => p.alive).length;
+    const liveBotCount = aliveBots.filter((b: any) => b.alive).length;
+    if (livePlayerCount + liveBotCount < MIN_SNAKES) {
+      for (let i = 0; i < MIN_SNAKES - livePlayerCount - liveBotCount; i++) spawnBot(ctx);
     }
   }
 );
 
 export const tick = tickReducer;
 
+// ============================================================
+// Connection lifecycle
+// ============================================================
+
+function ensureTickScheduled(ctx: any) {
+  for (const _ of ctx.db.game_tick.iter()) return; // already scheduled
+  ctx.db.game_tick.insert({
+    scheduled_id: 0n,
+    scheduled_at: ScheduleAt.interval(TICK_INTERVAL_US),
+  });
+}
+
 export const on_connect = spacetimedb.clientConnected((ctx: any) => {
-  const ticks = [...ctx.db.game_tick.iter()];
-  if (ticks.length === 0) {
-    ctx.db.game_tick.insert({
-      scheduled_id: 0n,
-      scheduled_at: ScheduleAt.interval(TICK_INTERVAL_US),
-    });
-  }
+  ensureTickScheduled(ctx);
 });
 
 export const on_disconnect = spacetimedb.clientDisconnected((ctx: any) => {
   const sender = ctx.sender;
-
   const player = ctx.db.player.identity.find(sender);
+
   if (player) {
-    const segments = getSegmentsByOwner(ctx, sender);
-    let segIndex = 0;
-    for (const seg of segments) {
-      if (segIndex % 3 === 0) {
-        ctx.db.food.insert({
-          id: 0n,
-          x: seg.x,
-          y: seg.y,
-          color: '#FF6B6B',
-        });
+    // Drop segments as food (every 3rd), then delete the rest + the player row
+    let i = 0;
+    for (const seg of ctx.db.snake_segment.iter()) {
+      if (!seg.owner_identity.isEqual(sender)) continue;
+      if (i % 3 === 0) {
+        ctx.db.food.insert({ id: 0n, x: seg.x, y: seg.y, color: '#FF6B6B' });
       }
       ctx.db.snake_segment.id.delete(seg.id);
-      segIndex++;
+      i++;
     }
-
     ctx.db.player.identity.delete(sender);
   }
 
-  // Check if this was the last player
-  const players = [...ctx.db.player.iter()];
-  if (players.length === 0) {
-    // Delete all bots since last player disconnected
-    for (const b of ctx.db.bot.iter()) {
-      // Delete bot's segments first
-      const botSegments = getBotSegments(ctx, b.id);
-      for (const seg of botSegments) {
-        ctx.db.bot_segment.id.delete(seg.id);
-      }
-      ctx.db.bot.id.delete(b.id);
-    }
-    // Clear ALL data from the database
-    // Clear all players (should already be empty, but for safety)
-    for (const p of ctx.db.player.iter()) {
-      ctx.db.player.identity.delete(p.identity);
-    }
-
-    // Clear all bots
-    for (const b of ctx.db.bot.iter()) {
-      ctx.db.bot.id.delete(b.id);
-    }
-
-    // Clear all bot segments
-    for (const seg of ctx.db.bot_segment.iter()) {
-      ctx.db.bot_segment.id.delete(seg.id);
-    }
-
-    // Clear all player segments
-    for (const seg of ctx.db.snake_segment.iter()) {
-      ctx.db.snake_segment.id.delete(seg.id);
-    }
-
-    // Clear all food
-    for (const f of ctx.db.food.iter()) {
-      ctx.db.food.id.delete(f.id);
-    }
-
-    // Clear all events
-    for (const e of ctx.db.player_position_event.iter()) {
-      ctx.db.player_position_event.id.delete(e.id);
-    }
-    for (const e of ctx.db.player_died_event.iter()) {
-      ctx.db.player_died_event.id.delete(e.id);
-    }
-    for (const e of ctx.db.player_joined_event.iter()) {
-      ctx.db.player_joined_event.id.delete(e.id);
-    }
-    for (const e of ctx.db.bot_died_event.iter()) {
-      ctx.db.bot_died_event.id.delete(e.id);
-    }
-
-    // Stop the tick
-    const ticks = [...ctx.db.game_tick.iter()];
-    for (const t of ticks) {
-      ctx.db.game_tick.scheduled_id.delete(t.scheduled_id);
-    }
-
-    // Reinitialize with initial food and MIN_SNAKES bots
-    // Spawn initial food
-    for (let i = 0; i < MAX_FOOD; i++) {
-      const pos = getRandomPosition(ctx);
-      ctx.db.food.insert({
-        id: 0n,
-        x: pos.x,
-        y: pos.y,
-        color: getRandomColor(ctx),
-      });
-    }
-
-    // Spawn initial bots
-    for (let i = 0; i < MIN_SNAKES; i++) {
-      spawnBot(ctx);
-    }
-  }
+  // If the world is empty, leave the bots and food running — they'll keep
+  // the server populated until the next player joins. Tick keeps running.
 });
 
 export const init = spacetimedb.init((ctx: any) => {
-  // Spawn initial food
-  for (let i = 0; i < MAX_FOOD; i++) {
-    const pos = getRandomPosition(ctx);
-    ctx.db.food.insert({
-      id: 0n,
-      x: pos.x,
-      y: pos.y,
-      color: getRandomColor(ctx),
-    });
-  }
-  
-  // Spawn initial bots to reach minimum snake count
-  for (let i = 0; i < MIN_SNAKES; i++) {
-    spawnBot(ctx);
-  }
-  
-  const ticks = [...ctx.db.game_tick.iter()];
-  if (ticks.length === 0) {
-    ctx.db.game_tick.insert({
-      scheduled_id: 0n,
-      scheduled_at: ScheduleAt.interval(TICK_INTERVAL_US),
-    });
-  }
+  spawnInitialFood(ctx, MAX_FOOD);
+  for (let i = 0; i < MIN_SNAKES; i++) spawnBot(ctx);
+  ensureTickScheduled(ctx);
 });
 
 export default spacetimedb;
