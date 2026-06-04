@@ -193,6 +193,14 @@ export class Game {
         name: p.name, color: p.color, x: p.x, y: p.y,
         direction: p.direction, alive: p.alive, score: p.score, length: p.length,
       });
+      // Record the server position with a timestamp so the render loop
+      // can lerp toward it. Without this, `lastServerPositions` stays
+      // empty (the server never inserts into player_position_event) and
+      // the camera falls back to the raw 20Hz table value, making the
+      // world appear to jitter as the camera stair-steps.
+      this.lastServerPositions.set(p.identity.toString(), {
+        x: p.x, y: p.y, direction: p.direction, t: performance.now(),
+      });
       if (p.identity.toString() === this.myIdentity && p.score > this.myScore) {
         this.sound.playEatSound();
       }
@@ -242,6 +250,11 @@ export class Game {
       Object.assign(existing, {
         name: b.name, color: b.color, x: b.x, y: b.y,
         direction: b.direction, alive: b.alive, score: b.score, length: b.length,
+      });
+      // Same rationale as player.onUpdate: keep lastServerPositions in sync
+      // so bot motion (and the camera, when following a bot) is smoothed.
+      this.lastServerPositions.set('bot-' + b.id.toString(), {
+        x: b.x, y: b.y, direction: b.direction, t: performance.now(),
       });
     });
 

@@ -187,11 +187,16 @@ export class UI {
     // Head rendering constants from renderer.ts (kept in sync):
     //   headLength = baseWidth + 6  (baseWidth=14 → 20)
     //   headShift  = headLength * 0.3  (≈ 6)
-    //   backWidth  = baseWidth + 12  (≈ 26), so the head's vertical radius is ~13
-    // The label sits above the head's back-center, with a little extra padding.
+    //   backWidth  = baseWidth + 12  (≈ 26), so the head's vertical radius
+    //                                     is at most 13 (horizontal snake)
+    //   headLength/2 = 10  (vertical snake, smaller vertical extent)
+    // The label sits directly above the head's rendered center. Previous
+    // versions pulled the label 10px back in the direction of movement,
+    // which offset it to one side of the head for horizontal/vertical
+    // snakes. Centering on the head's actual X keeps it directly overhead
+    // regardless of heading.
     const HEAD_SHIFT = 6;
-    const HEAD_BACK_OFFSET = 10; // pull label back from the snout
-    const HEAD_TOP_OFFSET = 20;  // lift label above the head's back
+    const HEAD_TOP_OFFSET = 20;  // lift label above the head's back edge
 
     for (const p of players) {
       if (p.identity === this.myIdentity) continue;
@@ -212,16 +217,18 @@ export class UI {
         label.name = p.name;
       }
 
-      // Position above the head's actual rendered center, accounting for
-      // the forward headShift in the direction of movement. This keeps the
-      // label anchored to the visual head even when the snake is moving
-      // horizontally (where a fixed -25px offset would drift to the side).
+      // Position directly above the head's rendered center. The head is
+      // drawn at (p.x + dir*HEAD_SHIFT) and the trapezoid extends at most
+      // 13 units above its center, so subtracting HEAD_TOP_OFFSET places
+      // the label bottom safely above the head's back for every heading.
+      // The CSS `transform: translate(-50%, -100%)` centers the text on
+      // screenX and anchors the label's bottom at screenY.
       const dirX = Math.cos(p.direction);
       const dirY = Math.sin(p.direction);
       const headX = p.x + dirX * HEAD_SHIFT;
       const headY = p.y + dirY * HEAD_SHIFT;
-      const screenX = headX - dirX * HEAD_BACK_OFFSET - camera.x + offsetX;
-      const screenY = headY - dirY * HEAD_BACK_OFFSET - HEAD_TOP_OFFSET - camera.y + offsetY;
+      const screenX = headX - camera.x + offsetX;
+      const screenY = headY - HEAD_TOP_OFFSET - camera.y + offsetY;
       const offScreen =
         screenX < -50 || screenX > canvas.width + 50 ||
         screenY < -50 || screenY > canvas.height + 50;
