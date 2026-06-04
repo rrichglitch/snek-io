@@ -483,8 +483,12 @@ export class Game {
     let smoothed = this.smoothedPositions.get(key);
 
     if (!last) {
-      // No server update seen yet — just use the current server position.
-      const s = smoothed ?? { x: server.x, y: server.y, direction: server.direction };
+      // No position-event updates have arrived for this entity yet, so
+      // there is nothing to interpolate toward. Fall through to the live
+      // server position (which is kept fresh by player.onUpdate / bot.onUpdate
+      // every game tick) — NOT a cached smoothed value, which would be
+      // stale by exactly one frame and would freeze the camera.
+      const s = { x: server.x, y: server.y, direction: server.direction };
       this.smoothedPositions.set(key, s);
       return s;
     }

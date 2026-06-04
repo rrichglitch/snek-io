@@ -371,7 +371,20 @@ export const join_game = spacetimedb.reducer(
   (ctx: any, { name, color }: { name: string; color: string }) => {
     const sender = ctx.sender;
 
-    if (ctx.db.player.identity.find(sender)) return;
+    // Respawn path: if the player already exists (killed, not disconnected),
+    // the previous version of this reducer bailed out and the player stayed
+    // dead. Drop the dead row + any orphan segments so the insert below
+    // creates a fresh snake. Clients see onDelete → onInsert and rebuild
+    // local state from scratch.
+    const existing = ctx.db.player.identity.find(sender);
+    if (existing) {
+      for (const seg of ctx.db.snake_segment.iter()) {
+        if (seg.owner_identity.isEqual(sender)) {
+          ctx.db.snake_segment.id.delete(seg.id);
+        }
+      }
+      ctx.db.player.identity.delete(sender);
+    }
 
     const pos = getRandomPosition(ctx);
     const dir = ctx.random() * Math.PI * 2;
