@@ -169,8 +169,11 @@ export class UI {
 
   // Updates positions and visibility of all snake name labels in place.
   // No DOM thrash — divs are reused across frames.
+  // Names are positioned above the head's actual rendered position (which is
+  // shifted forward in the direction of movement) so they stay anchored
+  // regardless of the snake's heading.
   updateNameLabels(
-    players: Array<{ identity: string; name: string; x: number; y: number; alive: boolean }>,
+    players: Array<{ identity: string; name: string; x: number; y: number; direction: number; alive: boolean }>,
     camera: { x: number; y: number },
     viewport: { width: number; height: number },
     canvas: { width: number; height: number }
@@ -180,6 +183,15 @@ export class UI {
     const offsetX = (canvas.width - viewport.width) / 2;
     const offsetY = (canvas.height - viewport.height) / 2;
     const seen = new Set<string>();
+
+    // Head rendering constants from renderer.ts (kept in sync):
+    //   headLength = baseWidth + 6  (baseWidth=14 → 20)
+    //   headShift  = headLength * 0.3  (≈ 6)
+    //   backWidth  = baseWidth + 12  (≈ 26), so the head's vertical radius is ~13
+    // The label sits above the head's back-center, with a little extra padding.
+    const HEAD_SHIFT = 6;
+    const HEAD_BACK_OFFSET = 10; // pull label back from the snout
+    const HEAD_TOP_OFFSET = 20;  // lift label above the head's back
 
     for (const p of players) {
       if (p.identity === this.myIdentity) continue;
@@ -200,8 +212,16 @@ export class UI {
         label.name = p.name;
       }
 
-      const screenX = p.x - camera.x + offsetX;
-      const screenY = p.y - camera.y + offsetY - 25;
+      // Position above the head's actual rendered center, accounting for
+      // the forward headShift in the direction of movement. This keeps the
+      // label anchored to the visual head even when the snake is moving
+      // horizontally (where a fixed -25px offset would drift to the side).
+      const dirX = Math.cos(p.direction);
+      const dirY = Math.sin(p.direction);
+      const headX = p.x + dirX * HEAD_SHIFT;
+      const headY = p.y + dirY * HEAD_SHIFT;
+      const screenX = headX - dirX * HEAD_BACK_OFFSET - camera.x + offsetX;
+      const screenY = headY - dirY * HEAD_BACK_OFFSET - HEAD_TOP_OFFSET - camera.y + offsetY;
       const offScreen =
         screenX < -50 || screenX > canvas.width + 50 ||
         screenY < -50 || screenY > canvas.height + 50;

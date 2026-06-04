@@ -50,6 +50,17 @@ export class Game {
   private botSegments = new Map<string, LocalSegment[]>();
   private foods: Food[] = [];
 
+  // Client-side interpolation state. The server broadcasts position updates
+  // at the game tick rate (~20Hz), and the render loop runs at the display
+  // refresh rate (~60Hz). Without smoothing the snake visibly teleports
+  // between ticks. We store the last server-authoritative position and a
+  // smoothed render position that lerps toward the target each frame.
+  // The interpolation horizon is 100ms — enough to span a full server tick
+  // plus a small buffer, short enough that the snake still feels responsive.
+  private lastServerPositions = new Map<string, { x: number; y: number; direction: number; t: number }>();
+  private smoothedPositions = new Map<string, { x: number; y: number; direction: number }>();
+  private readonly SMOOTHING_MS = 100;
+
   private myIdentity = '';
   private myScore = 0;
   private selectedColorIndex = Math.floor(Math.random() * COLORS.length);
@@ -279,6 +290,11 @@ export class Game {
         p.y = ev.y;
         p.direction = ev.direction;
       }
+      // Record the server-authoritative position with a timestamp so the
+      // render loop can lerp toward it over the interpolation window.
+      this.lastServerPositions.set(ev.identity.toString(), {
+        x: ev.x, y: ev.y, direction: ev.direction, t: performance.now(),
+      });
     });
 
     c.db.player_died_event.onInsert((_ctx, ev) => {
@@ -351,6 +367,13 @@ export class Game {
   }
 
   private respawn() {
+    // Clean up any stale state from the previous life so the renderer and
+    // leaderboard don't briefly show a dead snake or duplicate segments.
+    this.playerSegments.delete(this.myIdentity);
+    this.lastServerPositions.delete(this.myIdentity);
+    this.smoothedPositions.delete(this.myIdentity);
+    this.ui.removeNameLabel(this.myIdentity);
+
     this.ui.hideDeathScreen();
     this.ui.showLeaderboard();
     this.ui.showSpeaker();
@@ -359,6 +382,12 @@ export class Game {
     const name = this.ui.getNameInput();
     const color = this.ui.getSelectedColor();
     this.conn?.reducers.joinGame({ name, color });
+
+    // Re-attach the keyboard refresh loop defensively. The interval from
+    // the initial joinGame should still be running, but a stutter or a
+    // future refactor could clear it — better to guarantee it's live after
+    // a respawn so the player can steer immediately.
+    this.startDirectionRefresh();
   }
 
   private startDirectionRefresh() {
@@ -391,24 +420,36 @@ export class Game {
       return;
     }
 
+    const now = performance.now();
     const renderSnakes: RenderSnakes = new Map();
 
     for (const [identity, player] of this.players) {
-      if (!player.alive) continue;
+      if (!player.alive) {
+        this.smoothedPositions.delete(identity);
+        this.lastServerPositions.delete(identity);
+        continue;
+      }
       const segs = this.playerSegments.get(identity) ?? [];
+      const smoothed = this.computeSmoothedPosition(identity, player, now);
       renderSnakes.set(identity, {
-        x: player.x, y: player.y, color: player.color,
-        alive: player.alive, direction: player.direction,
+        x: smoothed.x, y: smoothed.y, color: player.color,
+        alive: player.alive, direction: smoothed.direction,
         segments: segs.map(s => ({ x: s.x, y: s.y, width: s.width })),
       });
     }
 
     for (const [botId, bot] of this.bots) {
-      if (!bot.alive) continue;
+      if (!bot.alive) {
+        this.smoothedPositions.delete('bot-' + botId);
+        this.lastServerPositions.delete('bot-' + botId);
+        continue;
+      }
       const segs = this.botSegments.get(botId) ?? [];
-      renderSnakes.set('bot-' + botId, {
-        x: bot.x, y: bot.y, color: bot.color,
-        alive: bot.alive, direction: bot.direction,
+      const key = 'bot-' + botId;
+      const smoothed = this.computeSmoothedPosition(key, bot, now);
+      renderSnakes.set(key, {
+        x: smoothed.x, y: smoothed.y, color: bot.color,
+        alive: bot.alive, direction: smoothed.direction,
         segments: segs.map(s => ({ x: s.x, y: s.y, width: s.width })),
       });
     }
@@ -428,11 +469,60 @@ export class Game {
     requestAnimationFrame(this.gameLoop);
   };
 
+  // Lerp from the last smoothed position toward the latest server position,
+  // using a fixed interpolation window. The first frame after a server
+  // update snaps directly to the new position (no rubber-banding on the
+  // first tick). For subsequent frames we advance the smoothed position
+  // by (frameDelta / SMOOTHING_MS) of the remaining distance.
+  private computeSmoothedPosition(
+    key: string,
+    server: { x: number; y: number; direction: number },
+    now: number
+  ): { x: number; y: number; direction: number } {
+    const last = this.lastServerPositions.get(key);
+    let smoothed = this.smoothedPositions.get(key);
+
+    if (!last) {
+      // No server update seen yet — just use the current server position.
+      const s = smoothed ?? { x: server.x, y: server.y, direction: server.direction };
+      this.smoothedPositions.set(key, s);
+      return s;
+    }
+
+    // The server target is the latest server update, not the live table
+    // value. Using the update timestamp (not `now`) keeps the interpolation
+    // speed independent of how stale the live value is.
+    const age = Math.max(0, now - last.t);
+    const t = Math.min(1, age / this.SMOOTHING_MS);
+
+    if (!smoothed) {
+      // First frame for this entity — snap to the server position so we
+      // don't lerp across the map from (0,0).
+      smoothed = { x: last.x, y: last.y, direction: last.direction };
+    } else {
+      // Shortest-arc interpolation for direction (radians wrap at ±PI).
+      let dDir = last.direction - smoothed.direction;
+      while (dDir > Math.PI) dDir -= 2 * Math.PI;
+      while (dDir < -Math.PI) dDir += 2 * Math.PI;
+      smoothed.x += (last.x - smoothed.x) * t;
+      smoothed.y += (last.y - smoothed.y) * t;
+      smoothed.direction += dDir * t;
+    }
+    this.smoothedPositions.set(key, smoothed);
+    return smoothed;
+  }
+
   private renderSnakeNames(snakes: RenderSnakes) {
     const canvas = document.getElementById('gameCanvas') as HTMLCanvasElement;
-    const players: Array<{ identity: string; name: string; x: number; y: number; alive: boolean }> = [];
+    const players: Array<{ identity: string; name: string; x: number; y: number; direction: number; alive: boolean }> = [];
     for (const [id, s] of snakes) {
-      players.push({ identity: id, name: this.lookupName(id), x: s.x, y: s.y, alive: s.alive });
+      players.push({
+        identity: id,
+        name: this.lookupName(id),
+        x: s.x, y: s.y,
+        direction: s.direction,
+        alive: s.alive,
+      });
     }
     this.ui.updateNameLabels(
       players,

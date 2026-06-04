@@ -24,26 +24,30 @@
     
     body {
       font-family: 'Nunito', sans-serif;
-      background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
-      min-height: 100vh;
-      min-height: 100dvh;
+      background: #1a1a2e;
       overflow: hidden;
       color: white;
       position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
       width: 100%;
       height: 100%;
+      margin: 0;
+      padding: 0;
     }
     
     #app {
-      width: 100vw;
-      width: 100dvw;
-      height: 100vh;
-      height: 100dvh;
+      width: 100%;
+      height: 100%;
       position: relative;
-      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
     }
     
     #gameCanvas {
+      position: fixed;
+      top: 0;
+      left: 0;
       width: 100%;
       height: 100%;
       display: block;
@@ -51,7 +55,7 @@
     }
     
     #snake-names {
-      position: absolute;
+      position: fixed;
       top: 0;
       left: 0;
       width: 100%;
@@ -88,7 +92,6 @@
     .game-credit {
       position: absolute;
       bottom: 20px;
-      bottom: calc(20px + env(safe-area-inset-bottom));
       font-size: 0.9rem;
       color: rgba(255, 255, 255, 0.5);
       font-weight: 400;
@@ -258,6 +261,7 @@
       transition: all 0.3s ease;
       text-transform: uppercase;
       letter-spacing: 1px;
+      margin-bottom: 1rem;
     }
     
     .play-btn:hover {
@@ -272,11 +276,9 @@
     #hud {
       position: absolute;
       top: 0;
-      top: env(safe-area-inset-top);
       left: 0;
       width: 100%;
       padding: 1rem;
-      padding-top: calc(1rem + env(safe-area-inset-top));
       display: flex;
       justify-content: space-between;
       pointer-events: none;
@@ -285,10 +287,8 @@
 
     #leaderboard {
       position: absolute;
-      top: 1rem;
-      top: calc(1rem + env(safe-area-inset-top));
-      right: 1rem;
-      right: calc(1rem + env(safe-area-inset-right));
+      top: 0;
+      right: 0;
       background: rgba(0,0,0,0.7);
       backdrop-filter: blur(10px);
       border-radius: 12px;
@@ -296,7 +296,6 @@
       border: 1px solid rgba(255,255,255,0.2);
       min-width: 200px;
       max-width: 280px;
-      max-height: 60vh;
       pointer-events: none;
       z-index: 51;
       overflow-y: auto;
@@ -308,7 +307,6 @@
         min-width: 120px;
         font-size: 0.8rem;
         padding: 0.4rem;
-        max-height: 70vh;
       }
       
       .leaderboard-title {
@@ -342,9 +340,7 @@
         max-width: 140px;
         min-width: 100px;
         padding: 0.3rem;
-        max-height: 85vh;
         font-size: 0.7rem;
-        overflow-y: hidden;
       }
       
       .leaderboard-item {
@@ -434,10 +430,8 @@
 
     #speaker-icon {
       position: absolute;
-      top: 1rem;
-      top: calc(1rem + env(safe-area-inset-top));
-      left: 1rem;
-      left: calc(1rem + env(safe-area-inset-left));
+      top: 0.5rem;
+      left: 0.5rem;
       font-size: 1.5rem;
       cursor: pointer;
       z-index: 200;
@@ -453,16 +447,13 @@
     @media (orientation: landscape) {
       #speaker-icon {
         top: 0.5rem;
-        top: calc(0.5rem + env(safe-area-inset-top));
         left: 0.5rem;
-        left: calc(0.5rem + env(safe-area-inset-left));
         font-size: 1.2rem;
         padding: 0.35rem 0.5rem;
       }
 
       #hud {
         padding: 0.5rem;
-        padding-top: calc(0.5rem + env(safe-area-inset-top));
       }
       
       .hud-panel {
@@ -480,6 +471,10 @@
 
     #speaker-icon:hover {
       transform: scale(1.1);
+    }
+
+    #speaker-icon.hidden {
+      display: none;
     }
 
 
@@ -568,7 +563,7 @@
       }
     }
   </style>
-  <script type="module" crossorigin src="/snek-io/assets/index-DzQAt55z.js"></script>
+  <script type="module" crossorigin src="/snek-io/assets/index-DNcGXsZ_.js"></script>
 </head>
 <body>
   <div id="app">
