@@ -210,6 +210,7 @@ export class Game {
     c.db.player.onDelete((_ctx, p) => {
       this.players.delete(p.identity.toString());
       this.playerSegments.delete(p.identity.toString());
+      this.clearSegmentInterpolation(p.identity.toString());
       this.ui.removeNameLabel(p.identity.toString());
     });
 
@@ -221,6 +222,11 @@ export class Game {
         width: (seg as unknown as SnakeSegment).width || 14,
       };
       this.insertSorted(this.playerSegments, id, local);
+      // Seed the interpolation state for this segment so the first frame
+      // after insertion doesn't lerp from (0,0).
+      this.lastServerPositions.set(this.segKey(id, seg.segmentIndex), {
+        x: seg.x, y: seg.y, direction: 0, t: performance.now(),
+      });
     });
 
     c.db.snake_segment.onUpdate((_ctx, _old, seg) => {
@@ -234,6 +240,18 @@ export class Game {
         x: seg.x, y: seg.y,
         width: (seg as unknown as SnakeSegment).width || segs[idx].width,
       };
+      // Record the server position with a timestamp so the render loop
+      // can lerp the segment toward it. Without this the body stair-steps
+      // at 20Hz while the camera (smoothed) glides — the body then appears
+      // to jitter relative to the camera.
+      this.lastServerPositions.set(this.segKey(id, seg.segmentIndex), {
+        x: seg.x, y: seg.y, direction: 0, t: performance.now(),
+      });
+    });
+
+    c.db.snake_segment.onDelete((_ctx, seg) => {
+      const id = seg.ownerIdentity.toString();
+      this.lastServerPositions.delete(this.segKey(id, seg.segmentIndex));
     });
 
     c.db.bot.onInsert((_ctx, b) => {
@@ -262,6 +280,7 @@ export class Game {
       const botId = b.id.toString();
       this.bots.delete(botId);
       this.botSegments.delete(botId);
+      this.clearSegmentInterpolation('bot-' + botId);
       this.ui.removeNameLabel('bot-' + botId);
     });
 
@@ -273,6 +292,9 @@ export class Game {
         width: seg.width || 14,
       };
       this.insertSorted(this.botSegments, botId, local);
+      this.lastServerPositions.set(this.segKey('bot-' + botId, seg.segmentIndex), {
+        x: seg.x, y: seg.y, direction: 0, t: performance.now(),
+      });
     });
 
     c.db.bot_segment.onUpdate((_ctx, _old, seg) => {
@@ -286,6 +308,13 @@ export class Game {
         x: seg.x, y: seg.y,
         width: seg.width || segs[idx].width,
       };
+      this.lastServerPositions.set(this.segKey('bot-' + botId, seg.segmentIndex), {
+        x: seg.x, y: seg.y, direction: 0, t: performance.now(),
+      });
+    });
+
+    c.db.bot_segment.onDelete((_ctx, seg) => {
+      this.lastServerPositions.delete(this.segKey('bot-' + seg.botId.toString(), seg.segmentIndex));
     });
 
     c.db.food.onInsert((_ctx, f) => {
@@ -317,6 +346,24 @@ export class Game {
     });
 
     c.db.bot_died_event.onInsert(() => {});
+  }
+
+  // Unique key for a single segment in the interpolation state map.
+  // Keeps player and bot segment positions out of each other's way and
+  // out of the way of the snake-head entries (which use the plain
+  // identity or 'bot-<id>').
+  private segKey(ownerKey: string, segmentIndex: number): string {
+    return `seg-${ownerKey}-${segmentIndex}`;
+  }
+
+  // Drop every interpolation entry that belongs to one snake. Called on
+  // player/bot deletion and on respawn so stale segment positions don't
+  // leak into the next life.
+  private clearSegmentInterpolation(ownerKey: string) {
+    const prefix = `seg-${ownerKey}-`;
+    for (const key of this.lastServerPositions.keys()) {
+      if (key.startsWith(prefix)) this.lastServerPositions.delete(key);
+    }
   }
 
   // Binary-search insert into a sorted-by-segmentIndex list. New segments
@@ -383,8 +430,9 @@ export class Game {
     // Clean up any stale state from the previous life so the renderer and
     // leaderboard don't briefly show a dead snake or duplicate segments.
     this.playerSegments.delete(this.myIdentity);
-    this.lastServerPositions.delete(this.myIdentity);
+    this.clearSegmentInterpolation(this.myIdentity);
     this.smoothedPositions.delete(this.myIdentity);
+    this.lastServerPositions.delete(this.myIdentity);
     this.ui.removeNameLabel(this.myIdentity);
 
     this.ui.hideDeathScreen();
@@ -444,10 +492,21 @@ export class Game {
       }
       const segs = this.playerSegments.get(identity) ?? [];
       const smoothed = this.computeSmoothedPosition(identity, player, now);
+      // Smooth every segment too. The head drives the camera; if the
+      // body stair-steps at 20Hz while the camera glides smoothly, the
+      // snake looks like it's shuddering.
+      const smoothedSegs = segs.map(s => {
+        const sm = this.computeSmoothedPosition(
+          this.segKey(identity, s.segmentIndex),
+          { x: s.x, y: s.y, direction: 0 },
+          now
+        );
+        return { x: sm.x, y: sm.y, width: s.width };
+      });
       renderSnakes.set(identity, {
         x: smoothed.x, y: smoothed.y, color: player.color,
         alive: player.alive, direction: smoothed.direction,
-        segments: segs.map(s => ({ x: s.x, y: s.y, width: s.width })),
+        segments: smoothedSegs,
       });
     }
 
@@ -460,10 +519,18 @@ export class Game {
       const segs = this.botSegments.get(botId) ?? [];
       const key = 'bot-' + botId;
       const smoothed = this.computeSmoothedPosition(key, bot, now);
+      const smoothedSegs = segs.map(s => {
+        const sm = this.computeSmoothedPosition(
+          this.segKey(key, s.segmentIndex),
+          { x: s.x, y: s.y, direction: 0 },
+          now
+        );
+        return { x: sm.x, y: sm.y, width: s.width };
+      });
       renderSnakes.set(key, {
         x: smoothed.x, y: smoothed.y, color: bot.color,
         alive: bot.alive, direction: smoothed.direction,
-        segments: segs.map(s => ({ x: s.x, y: s.y, width: s.width })),
+        segments: smoothedSegs,
       });
     }
 
@@ -533,10 +600,16 @@ export class Game {
     const canvas = document.getElementById('gameCanvas') as HTMLCanvasElement;
     const players: Array<{ identity: string; name: string; x: number; y: number; direction: number; alive: boolean }> = [];
     for (const [id, s] of snakes) {
+      // Use the smoothed head segment position (segments[0]) for the label
+      // anchor. The renderer draws the head at exactly this point with
+      // headShift applied, so anchoring the label to the same coordinate
+      // keeps it directly overhead regardless of snake heading.
+      const headSeg = s.segments[0];
       players.push({
         identity: id,
         name: this.lookupName(id),
-        x: s.x, y: s.y,
+        x: headSeg ? headSeg.x : s.x,
+        y: headSeg ? headSeg.y : s.y,
         direction: s.direction,
         alive: s.alive,
       });
