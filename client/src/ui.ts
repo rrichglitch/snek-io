@@ -169,34 +169,29 @@ export class UI {
 
   // Updates positions and visibility of all snake name labels in place.
   // No DOM thrash — divs are reused across frames.
-  // Names are positioned above the head's actual rendered position (which is
-  // shifted forward in the direction of movement) so they stay anchored
-  // regardless of the snake's heading.
+  // Names are positioned directly above the rendered head. The head's
+  // actual screen position is computed by the renderer (with map-wrap
+  // handling and headShift in the direction of movement); the label just
+  // lifts it upward by HEAD_TOP_OFFSET and clamps the result to the
+  // screen edges so the label is never partially clipped.
   updateNameLabels(
-    players: Array<{ identity: string; name: string; x: number; y: number; direction: number; alive: boolean }>,
-    camera: { x: number; y: number },
+    players: Array<{ identity: string; name: string; screenX: number; screenY: number; alive: boolean }>,
     viewport: { width: number; height: number },
     canvas: { width: number; height: number }
   ) {
     const container = document.getElementById('snake-names');
     if (!container) return;
-    const offsetX = (canvas.width - viewport.width) / 2;
-    const offsetY = (canvas.height - viewport.height) / 2;
     const seen = new Set<string>();
 
-    // Head rendering constants from renderer.ts (kept in sync):
-    //   headLength = baseWidth + 6  (baseWidth=14 → 20)
-    //   headShift  = headLength * 0.3  (≈ 6)
-    //   backWidth  = baseWidth + 12  (≈ 26), so the head's vertical radius
-    //                                     is at most 13 (horizontal snake)
-    //   headLength/2 = 10  (vertical snake, smaller vertical extent)
-    // The label sits directly above the head's rendered center. Previous
-    // versions pulled the label 10px back in the direction of movement,
-    // which offset it to one side of the head for horizontal/vertical
-    // snakes. Centering on the head's actual X keeps it directly overhead
-    // regardless of heading.
-    const HEAD_SHIFT = 6;
-    const HEAD_TOP_OFFSET = 20;  // lift label above the head's back edge
+    // Lift the label above the head. 20 units clears the head's back edge
+    // for every heading (max back-extent is ~16.4 in the diagonal case).
+    const HEAD_TOP_OFFSET = 20;
+    // Pad the label inward from the screen edge so the full label stays
+    // on-screen even when the snake's head is right at the edge of the
+    // viewport. Without this the label is centered on the head and half
+    // of it gets clipped, making the visible portion look offset from
+    // the head ("label too far from the snake").
+    const EDGE_PAD = 4;
 
     for (const p of players) {
       if (p.identity === this.myIdentity) continue;
@@ -217,28 +212,41 @@ export class UI {
         label.name = p.name;
       }
 
-      // Position directly above the head's rendered center. The head is
-      // drawn at (p.x + dir*HEAD_SHIFT) and the trapezoid extends at most
-      // 13 units above its center, so subtracting HEAD_TOP_OFFSET places
-      // the label bottom safely above the head's back for every heading.
-      // The CSS `transform: translate(-50%, -100%)` centers the text on
-      // screenX and anchors the label's bottom at screenY.
-      const dirX = Math.cos(p.direction);
-      const dirY = Math.sin(p.direction);
-      const headX = p.x + dirX * HEAD_SHIFT;
-      const headY = p.y + dirY * HEAD_SHIFT;
-      const screenX = headX - camera.x + offsetX;
-      const screenY = headY - HEAD_TOP_OFFSET - camera.y + offsetY;
-      const offScreen =
-        screenX < -50 || screenX > canvas.width + 50 ||
-        screenY < -50 || screenY > canvas.height + 50;
+      // Measure the actual label size so the clamp uses the real width
+      // (snake names vary in length). The label's position is set every
+      // frame anyway, so re-measuring has no extra layout cost.
+      const rect = label.div.getBoundingClientRect();
+      const halfW = rect.width / 2;
+      const labelH = rect.height;
 
-      if (offScreen || !p.alive) {
+      // Anchor the label's bottom-center at the head's screen position,
+      // lifted upward by HEAD_TOP_OFFSET. The CSS `transform:
+      // translate(-50%, -100%)` centers the text on the anchor and pins
+      // its bottom edge at `top`.
+      let anchorX = p.screenX;
+      let anchorY = p.screenY - HEAD_TOP_OFFSET;
+
+      // Clamp to the screen bounds so the label is always fully visible.
+      // When the head is near the edge of the screen the label is shifted
+      // inward by up to halfW/labelH — this means it sits a few pixels
+      // away from the head at the edge, but it never gets half-clipped.
+      if (anchorX < halfW + EDGE_PAD) anchorX = halfW + EDGE_PAD;
+      else if (anchorX > canvas.width - halfW - EDGE_PAD) anchorX = canvas.width - halfW - EDGE_PAD;
+      if (anchorY < labelH + EDGE_PAD) anchorY = labelH + EDGE_PAD;
+
+      // Hide if the head is well off-screen (snake is not visible).
+      // The renderer culls off-screen snakes, so showing a label for an
+      // invisible head would be misleading.
+      const headOffScreen =
+        p.screenX < -100 || p.screenX > canvas.width + 100 ||
+        p.screenY < -100 || p.screenY > canvas.height + 100;
+
+      if (headOffScreen || !p.alive) {
         if (label.div.style.display !== 'none') label.div.style.display = 'none';
       } else {
         if (label.div.style.display === 'none') label.div.style.display = '';
-        label.div.style.left = `${screenX}px`;
-        label.div.style.top = `${screenY}px`;
+        label.div.style.left = `${anchorX}px`;
+        label.div.style.top = `${anchorY}px`;
       }
     }
 

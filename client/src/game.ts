@@ -712,36 +712,37 @@ export class Game {
 
   private renderSnakeNames(snakes: RenderSnakes) {
     const canvas = document.getElementById('gameCanvas') as HTMLCanvasElement;
-    const players: Array<{ identity: string; name: string; x: number; y: number; direction: number; alive: boolean }> = [];
+    const renderer = this.renderer!;
+    const cameraX = renderer.cameraX;
+    const cameraY = renderer.cameraY;
+    const viewportW = renderer.viewportWidth;
+    const viewportH = renderer.viewportHeight;
+
+    // Match the renderer's wrap offsets exactly. The renderer draws each
+    // snake at multiple wrap offsets (0, ±MAP_SIZE) so a snake near one
+    // edge of the map can also be drawn at the other edge when the camera
+    // is near that edge. The label must use the SAME wrap offset the
+    // rendered head actually uses — otherwise a snake whose head appears
+    // at screenX=-210 (the wrap of X=1990 when the camera is near the
+    // left edge) would have its label drawn at screenX=1790 (off-screen
+    // right) and the two would never agree.
+    const wrapOffsetsX = [0];
+    const wrapOffsetsY = [0];
+    if (cameraX < viewportW) wrapOffsetsX.push(-MAP_SIZE);
+    if (cameraX + viewportW > MAP_SIZE - viewportW) wrapOffsetsX.push(MAP_SIZE);
+    if (cameraY < viewportH) wrapOffsetsY.push(-MAP_SIZE);
+    if (cameraY + viewportH > MAP_SIZE - viewportH) wrapOffsetsY.push(MAP_SIZE);
+
+    const players: Array<{ identity: string; name: string; screenX: number; screenY: number; alive: boolean }> = [];
     for (const [id, s] of snakes) {
       if (!s.alive) continue;
 
-      // The label and the head must use the SAME world position, or the
-      // label will consistently sit ahead of (or behind) the rendered
-      // head in the snake's direction of movement. The root cause of the
-      // "label closer to center" bug was that the label pulled `live.x`
-      // from the `player` table (updated by `player.onUpdate`) while the
-      // head used the smoothed `segments[0].x` (from `snake_segment.onUpdate`).
-      // Those two callbacks fire at slightly different times within the
-      // same server transaction, so the interpolation state maps diverge
-      // — the label tracks the latest `player.onUpdate` while the head
-      // tracks the latest `snake_segment.onUpdate`, and the smoothing
-      // lerps at different rates for the two keys. The label ends up a
-      // full tick ahead of the head, which is most visible when the
-      // snake is moving toward the camera (label sits between the head
-      // and the camera = "closer to center").
-      //
-      // Fix: use the same smoothed head segment position the renderer
-      // uses. The smoothed `direction` field also feeds the headShift
-      // direction, so the label's shift matches the rendered head's
-      // shift exactly. The smoothing lag relative to the server is a
-      // property of the snake, not the label — the label and head are
-      // always at the same place.
       const headSeg = s.segments[0];
       if (!headSeg) continue;
 
-      // Compute head angle from head->next-segment, matching the
-      // renderer's writeHead exactly (with MAP_SIZE wrap handling).
+      // Compute the head angle from head->next-segment with MAP_SIZE
+      // wrap handling, matching the renderer's writeHead. The +π flips
+      // the angle because the head points away from the body.
       let angle = s.direction;
       if (s.segments.length > 1) {
         const next = s.segments[1];
@@ -758,19 +759,50 @@ export class Game {
         }
       }
 
+      // The renderer's head is drawn at the head segment's world position
+      // shifted forward by `headLength * 0.3` in the direction of movement.
+      // The headLength depends on the segment's baseWidth (default 14),
+      // so we need to use the same value the renderer uses or the label
+      // and the head will sit at slightly different world positions.
+      const headBaseWidth = headSeg.width || 14;
+      const headShift = (headBaseWidth + 6) * 0.3;
+      const headRenderedX = headSeg.x + Math.cos(angle) * headShift;
+      const headRenderedY = headSeg.y + Math.sin(angle) * headShift;
+
+      // Pick the wrap offset that puts the head closest to the camera
+      // center — this is the copy the renderer actually drew and the
+      // one the user can see. When the camera is in the middle of the
+      // map, only wrap=0 is in wrapOffsetsX/Y, so we always pick the
+      // unwrapped position (which is what the renderer draws).
+      let bestScreenX = 0;
+      let bestScreenY = 0;
+      let bestDist = Infinity;
+      for (const wrapX of wrapOffsetsX) {
+        for (const wrapY of wrapOffsetsY) {
+          const sx = headRenderedX + wrapX - cameraX;
+          const sy = headRenderedY + wrapY - cameraY;
+          const dx = sx - viewportW / 2;
+          const dy = sy - viewportH / 2;
+          const dist = Math.abs(dx) + Math.abs(dy);
+          if (dist < bestDist) {
+            bestDist = dist;
+            bestScreenX = sx;
+            bestScreenY = sy;
+          }
+        }
+      }
+
       players.push({
         identity: id,
         name: this.lookupName(id),
-        x: headSeg.x,
-        y: headSeg.y,
-        direction: angle,
+        screenX: bestScreenX,
+        screenY: bestScreenY,
         alive: s.alive,
       });
     }
     this.ui.updateNameLabels(
       players,
-      { x: this.renderer!.cameraX, y: this.renderer!.cameraY },
-      { width: this.renderer!.viewportWidth, height: this.renderer!.viewportHeight },
+      { width: viewportW, height: viewportH },
       { width: canvas.width, height: canvas.height }
     );
   }
