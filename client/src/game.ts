@@ -87,17 +87,24 @@ export class Game {
     this.input.attach();
 
     this.setupButtonHandlers();
-    this.resizeCanvas();
-    window.addEventListener('resize', () => this.resizeCanvas());
-    window.addEventListener('orientationchange', () => setTimeout(() => this.resizeCanvas(), 100));
-
-    this.loadSavedName();
-
+    // Create the renderer FIRST, then size the canvas/viewport to match
+    // the window. The previous order (resizeCanvas before renderer init)
+    // made the optional chain `this.renderer?.resize(...)` a no-op, so
+    // the viewport stayed at the default 800x600 while the canvas grew
+    // to the full window size — every label position computed in
+    // viewport coords was then 240+px off from where the head was
+    // actually drawn on the canvas.
     this.renderer = new WebGPURenderer(canvas);
     const ok = await this.renderer.init();
     if (!ok) {
       console.warn('WebGPU not available — the game canvas will stay blank.');
     }
+
+    this.resizeCanvas();
+    window.addEventListener('resize', () => this.resizeCanvas());
+    window.addEventListener('orientationchange', () => setTimeout(() => this.resizeCanvas(), 100));
+
+    this.loadSavedName();
 
     await this.connectToServer();
     requestAnimationFrame(this.gameLoop);
