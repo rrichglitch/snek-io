@@ -198,8 +198,22 @@ export class Game {
       // empty (the server never inserts into player_position_event) and
       // the camera falls back to the raw 20Hz table value, making the
       // world appear to jitter as the camera stair-steps.
+      //
+      // Critical: also seed the head segment's interpolation entry with
+      // the SAME timestamp. The server updates `player.x` and
+      // `segments[0].x` in the same transaction but their `onUpdate`
+      // callbacks fire at slightly different times. If we don't sync the
+      // timestamps, the identity key and the segKey lerp at different
+      // rates and the smoothed head position drifts away from the
+      // smoothed player position — the label (using one) and the head
+      // (using the other) end up in different places, with the label
+      // consistently ahead in the snake's direction of movement.
+      const now = performance.now();
       this.lastServerPositions.set(p.identity.toString(), {
-        x: p.x, y: p.y, direction: p.direction, t: performance.now(),
+        x: p.x, y: p.y, direction: p.direction, t: now,
+      });
+      this.lastServerPositions.set(this.segKey(p.identity.toString(), 0), {
+        x: p.x, y: p.y, direction: 0, t: now,
       });
       if (p.identity.toString() === this.myIdentity && p.score > this.myScore) {
         this.sound.playEatSound();
@@ -271,8 +285,15 @@ export class Game {
       });
       // Same rationale as player.onUpdate: keep lastServerPositions in sync
       // so bot motion (and the camera, when following a bot) is smoothed.
-      this.lastServerPositions.set('bot-' + b.id.toString(), {
-        x: b.x, y: b.y, direction: b.direction, t: performance.now(),
+      // Also seed the bot's head segment interpolation entry with the same
+      // timestamp to keep the label anchored to the head's actual position.
+      const now = performance.now();
+      const botKey = 'bot-' + b.id.toString();
+      this.lastServerPositions.set(botKey, {
+        x: b.x, y: b.y, direction: b.direction, t: now,
+      });
+      this.lastServerPositions.set(this.segKey(botKey, 0), {
+        x: b.x, y: b.y, direction: 0, t: now,
       });
     });
 
@@ -695,44 +716,55 @@ export class Game {
     for (const [id, s] of snakes) {
       if (!s.alive) continue;
 
-      // Anchor the label at the LIVE server position, not the smoothed
-      // head segment position from `snakes`. The renderer uses the
-      // smoothed position so the body glides smoothly between 20Hz
-      // server ticks — without smoothing, the snake stair-steps. But
-      // the label is a text element, not a shape that needs pixel-perfect
-      // smoothness, and the smoothing causes a visible bug: the smoothed
-      // position lerps over 100ms toward the server position, so it
-      // always trails the actual snake by up to 100ms. When the other
-      // snake is moving away from the camera (toward the edge of the
-      // screen), the smoothed head is closer to the center of the screen
-      // than the real snake, and the label — which tracks the smoothed
-      // head — appears to lag behind. Stair-stepping at 20Hz is only
-      // ~2.7 units per frame at MOVE_SPEED=8; the lag from smoothing is
-      // far more noticeable than the stair-step.
+      // The label and the head must use the SAME world position, or the
+      // label will consistently sit ahead of (or behind) the rendered
+      // head in the snake's direction of movement. The root cause of the
+      // "label closer to center" bug was that the label pulled `live.x`
+      // from the `player` table (updated by `player.onUpdate`) while the
+      // head used the smoothed `segments[0].x` (from `snake_segment.onUpdate`).
+      // Those two callbacks fire at slightly different times within the
+      // same server transaction, so the interpolation state maps diverge
+      // — the label tracks the latest `player.onUpdate` while the head
+      // tracks the latest `snake_segment.onUpdate`, and the smoothing
+      // lerps at different rates for the two keys. The label ends up a
+      // full tick ahead of the head, which is most visible when the
+      // snake is moving toward the camera (label sits between the head
+      // and the camera = "closer to center").
       //
-      // `s.x`/`s.y` from the RenderSnake are already passed through from
-      // the live server position (either raw for off-screen culled snakes
-      // or the smoothed value for on-screen ones). We pull the live
-      // position directly from the source table instead so the label
-      // never uses a smoothed value.
-      const isBot = id.startsWith('bot-');
-      const live = isBot
-        ? this.bots.get(id.slice(4))
-        : this.players.get(id);
-      if (!live) continue;
+      // Fix: use the same smoothed head segment position the renderer
+      // uses. The smoothed `direction` field also feeds the headShift
+      // direction, so the label's shift matches the rendered head's
+      // shift exactly. The smoothing lag relative to the server is a
+      // property of the snake, not the label — the label and head are
+      // always at the same place.
+      const headSeg = s.segments[0];
+      if (!headSeg) continue;
 
-      // Use the head's facing direction (the snake's `direction` field)
-      // for the headShift so the label sits where the rendered head
-      // actually is. The renderer's writeHead uses head->next-segment
-      // angle for headShift, but the difference is a few degrees at
-      // most and only matters for the 6px headShift offset.
+      // Compute head angle from head->next-segment, matching the
+      // renderer's writeHead exactly (with MAP_SIZE wrap handling).
+      let angle = s.direction;
+      if (s.segments.length > 1) {
+        const next = s.segments[1];
+        let nx = next.x;
+        let ny = next.y;
+        const dx0 = nx - headSeg.x;
+        const dy0 = ny - headSeg.y;
+        if (Math.abs(dx0) > MAP_SIZE / 2) nx += (dx0 > 0 ? -MAP_SIZE : MAP_SIZE);
+        if (Math.abs(dy0) > MAP_SIZE / 2) ny += (dy0 > 0 ? -MAP_SIZE : MAP_SIZE);
+        const dx = nx - headSeg.x;
+        const dy = ny - headSeg.y;
+        if (Math.abs(dx) > 0.001 || Math.abs(dy) > 0.001) {
+          angle = Math.atan2(dy, dx) + Math.PI;
+        }
+      }
+
       players.push({
         identity: id,
         name: this.lookupName(id),
-        x: live.x,
-        y: live.y,
-        direction: live.direction,
-        alive: live.alive,
+        x: headSeg.x,
+        y: headSeg.y,
+        direction: angle,
+        alive: s.alive,
       });
     }
     this.ui.updateNameLabels(

@@ -8,7 +8,7 @@ import { ScheduleAt } from 'spacetimedb';
 const MAP_SIZE = 2000;
 const INITIAL_SNAKE_LENGTH = 4;
 const MAX_FOOD = 200;
-const MOVE_SPEED = 8.0;
+const MOVE_SPEED = 11.0;
 const SEGMENT_SPACING = 18;
 const TICK_INTERVAL_US = 50000n;
 const MIN_SNAKES = 10;
