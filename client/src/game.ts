@@ -367,8 +367,11 @@ export class Game {
   }
 
   // Wrap a coordinate into [0, MAP_SIZE). Mirrors the server's wrapCoord
-  // so the client's smoothed positions stay canonical.
+  // so the client's smoothed positions stay canonical. The fast path
+  // avoids the (relatively expensive) modulo for the overwhelmingly
+  // common case where the value is already in bounds.
   private wrapCoord(v: number): number {
+    if (v >= 0 && v < MAP_SIZE) return v;
     return ((v % MAP_SIZE) + MAP_SIZE) % MAP_SIZE;
   }
 
@@ -497,6 +500,29 @@ export class Game {
         continue;
       }
       const segs = this.playerSegments.get(identity) ?? [];
+
+      // Viewport culling: skip the per-segment Map lookups and lerp math
+      // for snakes that are clearly off-screen. The renderer also culls
+      // these (snakeMightBeVisible), so passing through the raw server
+      // positions is visually identical — the snake never gets drawn.
+      // The margin covers a long snake's tail even when its head has
+      // just left the viewport.
+      const cam = this.renderer;
+      if (cam) {
+        const hx = player.x;
+        const hy = player.y;
+        const margin = 500;
+        if (hx < cam.cameraX - margin || hx > cam.cameraX + cam.viewportWidth + margin ||
+            hy < cam.cameraY - margin || hy > cam.cameraY + cam.viewportHeight + margin) {
+          renderSnakes.set(identity, {
+            x: player.x, y: player.y, color: player.color,
+            alive: player.alive, direction: player.direction,
+            segments: segs.map(s => ({ x: s.x, y: s.y, width: s.width })),
+          });
+          continue;
+        }
+      }
+
       const smoothed = this.computeSmoothedPosition(identity, player, now);
       // Smooth every segment too. The head drives the camera; if the
       // body stair-steps at 20Hz while the camera glides smoothly, the
@@ -524,6 +550,24 @@ export class Game {
       }
       const segs = this.botSegments.get(botId) ?? [];
       const key = 'bot-' + botId;
+
+      // Same viewport culling as the player loop above.
+      const cam = this.renderer;
+      if (cam) {
+        const hx = bot.x;
+        const hy = bot.y;
+        const margin = 500;
+        if (hx < cam.cameraX - margin || hx > cam.cameraX + cam.viewportWidth + margin ||
+            hy < cam.cameraY - margin || hy > cam.cameraY + cam.viewportHeight + margin) {
+          renderSnakes.set(key, {
+            x: bot.x, y: bot.y, color: bot.color,
+            alive: bot.alive, direction: bot.direction,
+            segments: segs.map(s => ({ x: s.x, y: s.y, width: s.width })),
+          });
+          continue;
+        }
+      }
+
       const smoothed = this.computeSmoothedPosition(key, bot, now);
       const smoothedSegs = segs.map(s => {
         const sm = this.computeSmoothedPosition(
@@ -585,13 +629,20 @@ export class Game {
     // lerp would drag it across 1980 units of the map. We adjust the
     // target to the wrapped equivalent that's closest to the current
     // smoothed position so the lerp takes the short way around.
+    //
+    // The difference is bounded by MAP_SIZE, so each branch fires at
+    // most once — if/else is faster than the equivalent while loop and
+    // avoids the branch-prediction cost of a loop that almost never
+    // iterates.
     let adjX = last.x;
     let adjY = last.y;
     if (smoothed) {
-      while (adjX - smoothed.x > MAP_SIZE / 2) adjX -= MAP_SIZE;
-      while (adjX - smoothed.x < -MAP_SIZE / 2) adjX += MAP_SIZE;
-      while (adjY - smoothed.y > MAP_SIZE / 2) adjY -= MAP_SIZE;
-      while (adjY - smoothed.y < -MAP_SIZE / 2) adjY += MAP_SIZE;
+      const dx = adjX - smoothed.x;
+      if (dx > MAP_SIZE / 2) adjX -= MAP_SIZE;
+      else if (dx < -MAP_SIZE / 2) adjX += MAP_SIZE;
+      const dy = adjY - smoothed.y;
+      if (dy > MAP_SIZE / 2) adjY -= MAP_SIZE;
+      else if (dy < -MAP_SIZE / 2) adjY += MAP_SIZE;
     }
 
     // The server target is the latest server update, not the live table
@@ -609,22 +660,23 @@ export class Game {
         direction: last.direction,
       };
     } else {
-      // Shortest-arc interpolation for direction (radians wrap at ±PI).
-      let dDir = last.direction - smoothed.direction;
-      while (dDir > Math.PI) dDir -= 2 * Math.PI;
-      while (dDir < -Math.PI) dDir += 2 * Math.PI;
       smoothed.x += (adjX - smoothed.x) * t;
       smoothed.y += (adjY - smoothed.y) * t;
-      smoothed.direction += dDir * t;
+      // Direction lerp: segments store direction=0 and never need it,
+      // and the head only needs it while turning. Skip the shortest-arc
+      // work entirely when the direction hasn't changed.
+      if (last.direction !== smoothed.direction) {
+        let dDir = last.direction - smoothed.direction;
+        while (dDir > Math.PI) dDir -= 2 * Math.PI;
+        while (dDir < -Math.PI) dDir += 2 * Math.PI;
+        smoothed.direction += dDir * t;
+      }
     }
 
-    // Wrap back into map bounds so the renderer and camera always see a
-    // canonical position. Without this, a wrap followed by several frames
-    // of lerp would leave the smoothed value at, say, x=2010, which is
-    // technically correct but breaks downstream math that assumes [0,
-    // MAP_SIZE).
-    smoothed.x = this.wrapCoord(smoothed.x);
-    smoothed.y = this.wrapCoord(smoothed.y);
+    // Wrap fast path: most values are already in [0, MAP_SIZE) after the
+    // lerp, so check before reaching for the modulo.
+    if (smoothed.x < 0 || smoothed.x >= MAP_SIZE) smoothed.x = this.wrapCoord(smoothed.x);
+    if (smoothed.y < 0 || smoothed.y >= MAP_SIZE) smoothed.y = this.wrapCoord(smoothed.y);
 
     this.smoothedPositions.set(key, smoothed);
     return smoothed;
@@ -639,12 +691,36 @@ export class Game {
       // headShift applied, so anchoring the label to the same coordinate
       // keeps it directly overhead regardless of snake heading.
       const headSeg = s.segments[0];
+      if (!headSeg) continue;
+
+      // Compute the head angle from head->next-segment, matching the
+      // renderer's writeHead exactly. The smoothed `direction` field
+      // is a weighted average of past headings — close, but not equal
+      // to the instantaneous segment-to-segment angle. The renderer
+      // uses the latter for headShift, so we must too, or the label
+      // sits at a slightly different point than the visible head.
+      let angle = s.direction;
+      if (s.segments.length > 1) {
+        const next = s.segments[1];
+        let nx = next.x;
+        let ny = next.y;
+        const dx0 = nx - headSeg.x;
+        const dy0 = ny - headSeg.y;
+        if (Math.abs(dx0) > MAP_SIZE / 2) nx += (dx0 > 0 ? -MAP_SIZE : MAP_SIZE);
+        if (Math.abs(dy0) > MAP_SIZE / 2) ny += (dy0 > 0 ? -MAP_SIZE : MAP_SIZE);
+        const dx = nx - headSeg.x;
+        const dy = ny - headSeg.y;
+        if (Math.abs(dx) > 0.001 || Math.abs(dy) > 0.001) {
+          angle = Math.atan2(dy, dx) + Math.PI;
+        }
+      }
+
       players.push({
         identity: id,
         name: this.lookupName(id),
-        x: headSeg ? headSeg.x : s.x,
-        y: headSeg ? headSeg.y : s.y,
-        direction: s.direction,
+        x: headSeg.x,
+        y: headSeg.y,
+        direction: angle,
         alive: s.alive,
       });
     }
