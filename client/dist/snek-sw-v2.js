@@ -6,6 +6,9 @@
 // experience we want is the install-availability heuristic.
 //
 // The handler is a passthrough that always goes to the network.
+//
+// Version: 2 (renamed from sw.js to ensure fresh registration after
+// repeated installability fix attempts — old SW was likely cached).
 
 self.addEventListener('install', (event) => {
   // Activate the new SW as soon as it finishes installing so users
@@ -19,10 +22,6 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
 });
 
-self.addEventListener('fetch', (event) => {
-  // Pass through every request unmodified. We deliberately do not
-  // call event.respondWith() — leaving it unhandled makes the browser
-  // fall through to its normal network stack, which is exactly what
-  // we want for a real-time game.
-  return;
-});
+// Service-Worker-Allowed header would let us expand the scope, but
+// we're registering at the app's base path with default scope so we
+// don't need it.

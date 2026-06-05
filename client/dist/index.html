@@ -108,6 +108,16 @@
     .game-credit a:hover {
       color: #00ff88;
     }
+
+    .build-version {
+      position: absolute;
+      bottom: 4px;
+      right: 8px;
+      font-size: 0.65rem;
+      color: rgba(255, 255, 255, 0.25);
+      font-family: monospace;
+      user-select: text;
+    }
     
     #menu.hidden {
       display: none;
@@ -574,7 +584,7 @@
       }
     }
   </style>
-  <script type="module" crossorigin src="/snek-io/assets/index-CCyhYseQ.js"></script>
+  <script type="module" crossorigin src="/snek-io/assets/index-DLVh1GwC.js"></script>
 </head>
 <body>
   <div id="app">
@@ -587,6 +597,7 @@
         <button class="play-btn" id="play-btn">Play</button>
       </div>
       <p class="game-credit">A <a href="https://github.com/rrichglitch" target="_blank" rel="noopener noreferrer">@rrichglitch</a> Game</p>
+      <p class="build-version" id="build-version">build …</p>
     </div>
     
     <canvas id="gameCanvas"></canvas>
