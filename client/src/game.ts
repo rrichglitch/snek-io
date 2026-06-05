@@ -5,7 +5,7 @@
 import { DbConnection, tables } from './module_bindings/index';
 import type { SnakeSegment } from './module_bindings/types';
 
-import { COLORS, DB_NAME, SERVER, STORAGE_KEYS } from './config';
+import { COLORS, DB_NAME, MAP_SIZE, SERVER, STORAGE_KEYS } from './config';
 import { SoundManager } from './sound';
 import { WebGPURenderer, type Food, type RenderSnakes } from './renderer';
 import { InputState } from './input';
@@ -366,6 +366,12 @@ export class Game {
     }
   }
 
+  // Wrap a coordinate into [0, MAP_SIZE). Mirrors the server's wrapCoord
+  // so the client's smoothed positions stay canonical.
+  private wrapCoord(v: number): number {
+    return ((v % MAP_SIZE) + MAP_SIZE) % MAP_SIZE;
+  }
+
   // Binary-search insert into a sorted-by-segmentIndex list. New segments
   // usually land at the tail (the snake just grew), so we check there first
   // and fall back to binary search.
@@ -573,6 +579,21 @@ export class Game {
       return s;
     }
 
+    // Shortest-path interpolation across the map wrap. The map is
+    // MAP_SIZE×MAP_SIZE and positions wrap at the edges, so a segment
+    // moving from x=1990 to x=10 has only traveled 20 units — but a raw
+    // lerp would drag it across 1980 units of the map. We adjust the
+    // target to the wrapped equivalent that's closest to the current
+    // smoothed position so the lerp takes the short way around.
+    let adjX = last.x;
+    let adjY = last.y;
+    if (smoothed) {
+      while (adjX - smoothed.x > MAP_SIZE / 2) adjX -= MAP_SIZE;
+      while (adjX - smoothed.x < -MAP_SIZE / 2) adjX += MAP_SIZE;
+      while (adjY - smoothed.y > MAP_SIZE / 2) adjY -= MAP_SIZE;
+      while (adjY - smoothed.y < -MAP_SIZE / 2) adjY += MAP_SIZE;
+    }
+
     // The server target is the latest server update, not the live table
     // value. Using the update timestamp (not `now`) keeps the interpolation
     // speed independent of how stale the live value is.
@@ -580,18 +601,31 @@ export class Game {
     const t = Math.min(1, age / this.SMOOTHING_MS);
 
     if (!smoothed) {
-      // First frame for this entity — snap to the server position so we
-      // don't lerp across the map from (0,0).
-      smoothed = { x: last.x, y: last.y, direction: last.direction };
+      // First frame for this entity — snap to (the wrapped equivalent of)
+      // the server position so we don't lerp across the map from (0,0).
+      smoothed = {
+        x: this.wrapCoord(adjX),
+        y: this.wrapCoord(adjY),
+        direction: last.direction,
+      };
     } else {
       // Shortest-arc interpolation for direction (radians wrap at ±PI).
       let dDir = last.direction - smoothed.direction;
       while (dDir > Math.PI) dDir -= 2 * Math.PI;
       while (dDir < -Math.PI) dDir += 2 * Math.PI;
-      smoothed.x += (last.x - smoothed.x) * t;
-      smoothed.y += (last.y - smoothed.y) * t;
+      smoothed.x += (adjX - smoothed.x) * t;
+      smoothed.y += (adjY - smoothed.y) * t;
       smoothed.direction += dDir * t;
     }
+
+    // Wrap back into map bounds so the renderer and camera always see a
+    // canonical position. Without this, a wrap followed by several frames
+    // of lerp would leave the smoothed value at, say, x=2010, which is
+    // technically correct but breaks downstream math that assumes [0,
+    // MAP_SIZE).
+    smoothed.x = this.wrapCoord(smoothed.x);
+    smoothed.y = this.wrapCoord(smoothed.y);
+
     this.smoothedPositions.set(key, smoothed);
     return smoothed;
   }
