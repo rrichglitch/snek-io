@@ -270,6 +270,27 @@ export class UI {
                   (navigator.userAgent.includes('Mac') && 'ontouchend' in document);
     const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
                          (navigator as any).standalone === true;
+    // Persist "installed" state to localStorage so it survives across
+    // page loads in the same browser session. We can't rely on
+    // (display-mode: standalone) alone because that only returns true
+    // when the PWA is launched from the home/app drawer icon — not
+    // when the user returns to the original browser tab after install.
+    // appinstalled is the canonical signal; we write it here and read
+    // it on every page load.
+    const INSTALLED_KEY = 'snek-io-pwa-installed';
+    if (localStorage.getItem(INSTALLED_KEY) === '1') {
+      // Already installed in a previous visit — skip the install UI.
+      console.log('[PWA] previously installed this browser — hiding install UI');
+      onInstalled();
+      return;
+    }
+    if (isStandalone) {
+      // Running as a launched PWA — mark as installed for next time.
+      localStorage.setItem(INSTALLED_KEY, '1');
+      console.log('[PWA] running as installed PWA — locking orientation');
+      onInstalled();
+      return;
+    }
 
     console.log('[PWA] setupPwaInstallPrompt — isMobile:', isMobile, 'isIOS:', isIOS, 'isStandalone:', isStandalone, 'hasSW:', 'serviceWorker' in navigator);
 
@@ -278,23 +299,20 @@ export class UI {
       e.preventDefault();
       deferred = e;
       (window as any).deferredInstallPrompt = e;
-      this.showInstallButton('Add to Home Screen');
+      // On Android the install action drops the app in the app drawer
+      // (not the home screen). The iOS path is handled by tapping the
+      // button and showing the Share sheet overlay inline.
+      this.showInstallButton(isIOS ? 'Add to Home Screen' : 'Install App');
     });
 
     window.addEventListener('appinstalled', () => {
       console.log('[PWA] appinstalled fired');
       deferred = null;
       (window as any).deferredInstallPrompt = null;
-      this.hideInstallButton();
+      localStorage.setItem(INSTALLED_KEY, '1');
+      this.removeInstallButton();
       onInstalled();
     });
-
-    if (isStandalone) {
-      // Already installed — no prompt needed, just lock orientation.
-      console.log('[PWA] running as standalone — locking orientation');
-      onInstalled();
-      return;
-    }
 
     if (isMobile) this.checkAndShowInstallButton(isIOS);
   }
@@ -310,6 +328,18 @@ export class UI {
   private hideInstallButton() {
     const btn = document.querySelector<HTMLElement>('.install-btn');
     if (btn) btn.style.display = 'none';
+  }
+
+  // Remove the install button + hint text entirely from the menu. Used
+  // after a successful install so it doesn't reappear on subsequent
+  // menu visits. hideInstallButton() just hides it for the current
+  // frame; removeInstallButton() takes it out of the DOM and the
+  // checkAndShowInstallButton() early-return guard won't recreate it.
+  private removeInstallButton() {
+    const btn = document.querySelector<HTMLElement>('.install-btn');
+    if (btn) btn.remove();
+    const hint = document.querySelector<HTMLElement>('.install-hint');
+    if (hint) hint.remove();
   }
 
   private checkAndShowInstallButton(isIOS: boolean) {
@@ -393,9 +423,12 @@ export class UI {
       box-shadow: 0 10px 30px rgba(0,0,0,0.4);
     `;
     if (isIOS) {
+      // iOS is the only platform where the user actually adds anything
+      // to their home screen — Android drops the installed PWA into
+      // the app drawer, not the home screen.
       toast.innerHTML = 'Use <b>Share</b> → <b>Add to Home Screen</b> to install.';
     } else {
-      toast.innerHTML = 'Tap your browser menu (⋮) and choose <b>Install app</b> or <b>Add to Home screen</b>.';
+      toast.innerHTML = 'Tap your browser menu (⋮) and choose <b>Install app</b>. The app will appear in your app drawer.';
     }
     document.body.appendChild(toast);
     setTimeout(() => toast.remove(), 6000);
