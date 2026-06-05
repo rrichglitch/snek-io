@@ -2,7 +2,7 @@
   "name": "snek.io",
   "short_name": "snek.io",
   "description": "Eat food. Grow longer. Don't die.",
-  "start_url": "/snek-io",
+  "start_url": "/snek-io/",
   "scope": "/snek-io/",
   "display_override": ["fullscreen", "minimal-ui", "standalone"],
   "display": "standalone",
@@ -13,12 +13,14 @@
     {
       "src": "/icon-192.svg",
       "sizes": "192x192",
-      "type": "image/svg+xml"
+      "type": "image/svg+xml",
+      "purpose": "any"
     },
     {
       "src": "/icon-512.svg",
       "sizes": "512x512",
-      "type": "image/svg+xml"
+      "type": "image/svg+xml",
+      "purpose": "any"
     }
   ]
 }

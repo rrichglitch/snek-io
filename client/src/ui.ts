@@ -271,7 +271,10 @@ export class UI {
     const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
                          (navigator as any).standalone === true;
 
+    console.log('[PWA] setupPwaInstallPrompt — isMobile:', isMobile, 'isIOS:', isIOS, 'isStandalone:', isStandalone, 'hasSW:', 'serviceWorker' in navigator);
+
     window.addEventListener('beforeinstallprompt', (e) => {
+      console.log('[PWA] beforeinstallprompt fired — installable!');
       e.preventDefault();
       deferred = e;
       (window as any).deferredInstallPrompt = e;
@@ -279,6 +282,7 @@ export class UI {
     });
 
     window.addEventListener('appinstalled', () => {
+      console.log('[PWA] appinstalled fired');
       deferred = null;
       (window as any).deferredInstallPrompt = null;
       this.hideInstallButton();
@@ -287,6 +291,7 @@ export class UI {
 
     if (isStandalone) {
       // Already installed — no prompt needed, just lock orientation.
+      console.log('[PWA] running as standalone — locking orientation');
       onInstalled();
       return;
     }
@@ -342,12 +347,18 @@ export class UI {
 
     btn.onclick = async () => {
       const prompt = (window as any).deferredInstallPrompt;
+      console.log('[PWA] install button clicked — deferredInstallPrompt:', prompt ? 'present' : 'null');
       if (prompt) {
-        prompt.prompt();
-        const { outcome } = await prompt.userChoice;
-        if (outcome === 'accepted') {
-          this.hideInstallButton();
-          hint.remove();
+        try {
+          await prompt.prompt();
+          const { outcome } = await prompt.userChoice;
+          console.log('[PWA] install prompt result:', outcome);
+          if (outcome === 'accepted') {
+            this.hideInstallButton();
+            hint.remove();
+          }
+        } catch (err) {
+          console.error('[PWA] install prompt failed:', err);
         }
         (window as any).deferredInstallPrompt = null;
       } else if (isIOS) {
@@ -355,8 +366,39 @@ export class UI {
         // use the system Share sheet. Show inline instructions instead
         // of an alert so it works in fullscreen PWA too.
         this.showIosInstallInstructions();
+      } else {
+        // Android but no deferred prompt — Chrome hasn't decided the
+        // page is installable yet. Common causes: service worker still
+        // activating, manifest not fully recognized, or the user
+        // dismissed the prompt too many times. Give them a hint so the
+        // button doesn't feel broken.
+        this.showInstallFallback(isIOS);
       }
     };
+  }
+
+  private showInstallFallback(isIOS: boolean) {
+    const existing = document.getElementById('pwa-fallback-toast');
+    if (existing) existing.remove();
+    const toast = document.createElement('div');
+    toast.id = 'pwa-fallback-toast';
+    toast.style.cssText = `
+      position: fixed; left: 50%; bottom: 1.5rem; transform: translateX(-50%);
+      z-index: 1000; max-width: 340px; width: calc(100% - 2rem);
+      background: rgba(0,0,0,0.92); color: white;
+      border: 1px solid rgba(0,217,255,0.4);
+      border-radius: 12px; padding: 0.85rem 1rem;
+      font-family: 'Nunito', sans-serif; font-size: 0.9rem;
+      line-height: 1.4; text-align: center;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+    `;
+    if (isIOS) {
+      toast.innerHTML = 'Use <b>Share</b> → <b>Add to Home Screen</b> to install.';
+    } else {
+      toast.innerHTML = 'Tap your browser menu (⋮) and choose <b>Install app</b> or <b>Add to Home screen</b>.';
+    }
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 6000);
   }
 
   private showIosInstallInstructions() {
