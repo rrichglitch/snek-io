@@ -358,11 +358,18 @@ export class Game {
 
   // Drop every interpolation entry that belongs to one snake. Called on
   // player/bot deletion and on respawn so stale segment positions don't
-  // leak into the next life.
+  // leak into the next life. Must clear BOTH maps — if smoothedPositions
+  // keeps a stale entry for a segment index, the next segment inserted
+  // at that index will lerp from the old snake's position (often across
+  // the map) to the new one over 100ms, looking like the segment "flies
+  // in" from nowhere.
   private clearSegmentInterpolation(ownerKey: string) {
     const prefix = `seg-${ownerKey}-`;
     for (const key of this.lastServerPositions.keys()) {
       if (key.startsWith(prefix)) this.lastServerPositions.delete(key);
+    }
+    for (const key of this.smoothedPositions.keys()) {
+      if (key.startsWith(prefix)) this.smoothedPositions.delete(key);
     }
   }
 
@@ -686,42 +693,46 @@ export class Game {
     const canvas = document.getElementById('gameCanvas') as HTMLCanvasElement;
     const players: Array<{ identity: string; name: string; x: number; y: number; direction: number; alive: boolean }> = [];
     for (const [id, s] of snakes) {
-      // Use the smoothed head segment position (segments[0]) for the label
-      // anchor. The renderer draws the head at exactly this point with
-      // headShift applied, so anchoring the label to the same coordinate
-      // keeps it directly overhead regardless of snake heading.
-      const headSeg = s.segments[0];
-      if (!headSeg) continue;
+      if (!s.alive) continue;
 
-      // Compute the head angle from head->next-segment, matching the
-      // renderer's writeHead exactly. The smoothed `direction` field
-      // is a weighted average of past headings — close, but not equal
-      // to the instantaneous segment-to-segment angle. The renderer
-      // uses the latter for headShift, so we must too, or the label
-      // sits at a slightly different point than the visible head.
-      let angle = s.direction;
-      if (s.segments.length > 1) {
-        const next = s.segments[1];
-        let nx = next.x;
-        let ny = next.y;
-        const dx0 = nx - headSeg.x;
-        const dy0 = ny - headSeg.y;
-        if (Math.abs(dx0) > MAP_SIZE / 2) nx += (dx0 > 0 ? -MAP_SIZE : MAP_SIZE);
-        if (Math.abs(dy0) > MAP_SIZE / 2) ny += (dy0 > 0 ? -MAP_SIZE : MAP_SIZE);
-        const dx = nx - headSeg.x;
-        const dy = ny - headSeg.y;
-        if (Math.abs(dx) > 0.001 || Math.abs(dy) > 0.001) {
-          angle = Math.atan2(dy, dx) + Math.PI;
-        }
-      }
+      // Anchor the label at the LIVE server position, not the smoothed
+      // head segment position from `snakes`. The renderer uses the
+      // smoothed position so the body glides smoothly between 20Hz
+      // server ticks — without smoothing, the snake stair-steps. But
+      // the label is a text element, not a shape that needs pixel-perfect
+      // smoothness, and the smoothing causes a visible bug: the smoothed
+      // position lerps over 100ms toward the server position, so it
+      // always trails the actual snake by up to 100ms. When the other
+      // snake is moving away from the camera (toward the edge of the
+      // screen), the smoothed head is closer to the center of the screen
+      // than the real snake, and the label — which tracks the smoothed
+      // head — appears to lag behind. Stair-stepping at 20Hz is only
+      // ~2.7 units per frame at MOVE_SPEED=8; the lag from smoothing is
+      // far more noticeable than the stair-step.
+      //
+      // `s.x`/`s.y` from the RenderSnake are already passed through from
+      // the live server position (either raw for off-screen culled snakes
+      // or the smoothed value for on-screen ones). We pull the live
+      // position directly from the source table instead so the label
+      // never uses a smoothed value.
+      const isBot = id.startsWith('bot-');
+      const live = isBot
+        ? this.bots.get(id.slice(4))
+        : this.players.get(id);
+      if (!live) continue;
 
+      // Use the head's facing direction (the snake's `direction` field)
+      // for the headShift so the label sits where the rendered head
+      // actually is. The renderer's writeHead uses head->next-segment
+      // angle for headShift, but the difference is a few degrees at
+      // most and only matters for the 6px headShift offset.
       players.push({
         identity: id,
         name: this.lookupName(id),
-        x: headSeg.x,
-        y: headSeg.y,
-        direction: angle,
-        alive: s.alive,
+        x: live.x,
+        y: live.y,
+        direction: live.direction,
+        alive: live.alive,
       });
     }
     this.ui.updateNameLabels(
