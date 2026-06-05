@@ -279,6 +279,9 @@
       left: 0;
       width: 100%;
       padding: 1rem;
+      padding-top: calc(1rem + env(safe-area-inset-top));
+      padding-left: calc(1rem + env(safe-area-inset-left));
+      padding-right: calc(1rem + env(safe-area-inset-right));
       display: flex;
       justify-content: space-between;
       pointer-events: none;
@@ -293,6 +296,8 @@
       backdrop-filter: blur(10px);
       border-radius: 12px;
       padding: 1rem;
+      padding-top: calc(1rem + env(safe-area-inset-top));
+      padding-right: calc(1rem + env(safe-area-inset-right));
       border: 1px solid rgba(255,255,255,0.2);
       min-width: 200px;
       max-width: 280px;
@@ -431,7 +436,9 @@
     #speaker-icon {
       position: absolute;
       top: 0.5rem;
+      top: calc(0.5rem + env(safe-area-inset-top));
       left: 0.5rem;
+      left: calc(0.5rem + env(safe-area-inset-left));
       font-size: 1.5rem;
       cursor: pointer;
       z-index: 200;
@@ -447,7 +454,9 @@
     @media (orientation: landscape) {
       #speaker-icon {
         top: 0.5rem;
+        top: calc(0.5rem + env(safe-area-inset-top));
         left: 0.5rem;
+        left: calc(0.5rem + env(safe-area-inset-left));
         font-size: 1.2rem;
         padding: 0.35rem 0.5rem;
       }

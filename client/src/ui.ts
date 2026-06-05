@@ -266,56 +266,149 @@ export class UI {
   setupPwaInstallPrompt(onInstalled: () => void) {
     let deferred: Event | null = null;
     const isMobile = /Mobi|Android|iPad|iPhone|iPod/i.test(navigator.userAgent);
+    const isIOS = /iPad|iPhone|iPod/i.test(navigator.userAgent) ||
+                  (navigator.userAgent.includes('Mac') && 'ontouchend' in document);
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
+                         (navigator as any).standalone === true;
 
     window.addEventListener('beforeinstallprompt', (e) => {
       e.preventDefault();
       deferred = e;
       (window as any).deferredInstallPrompt = e;
-      this.showInstallButton();
+      this.showInstallButton('Add to Home Screen');
     });
 
     window.addEventListener('appinstalled', () => {
       deferred = null;
       (window as any).deferredInstallPrompt = null;
+      this.hideInstallButton();
       onInstalled();
     });
 
-    if (window.matchMedia('(display-mode: standalone)').matches) {
+    if (isStandalone) {
+      // Already installed — no prompt needed, just lock orientation.
       onInstalled();
       return;
     }
 
-    if (isMobile) this.checkAndShowInstallButton();
+    if (isMobile) this.checkAndShowInstallButton(isIOS);
   }
 
-  private showInstallButton() {
+  private showInstallButton(label: string) {
     const btn = document.querySelector<HTMLElement>('.install-btn');
-    if (btn) btn.style.display = 'block';
+    if (btn) {
+      btn.textContent = label;
+      btn.style.display = 'block';
+    }
   }
 
-  private checkAndShowInstallButton() {
+  private hideInstallButton() {
+    const btn = document.querySelector<HTMLElement>('.install-btn');
+    if (btn) btn.style.display = 'none';
+  }
+
+  private checkAndShowInstallButton(isIOS: boolean) {
     const menu = document.getElementById('menu');
     if (!menu || menu.classList.contains('hidden')) return;
     if (menu.querySelector('.install-btn')) return;
 
     const btn = document.createElement('button');
     btn.className = 'play-btn install-btn';
-    btn.textContent = 'Mobile App';
-    btn.style.marginBottom = '1rem';
-    btn.style.display = 'none';
+    // Always visible on mobile so users know they can install to get rid
+    // of the browser top bar. On iOS there's no beforeinstallprompt, so
+    // the button click reveals the Share -> Add to Home Screen steps.
+    btn.textContent = isIOS ? 'Add to Home Screen' : 'Install App';
+    btn.style.marginBottom = '0.5rem';
+    btn.style.display = 'block';
+    btn.style.fontSize = '0.95rem';
+    btn.style.padding = '0.6rem 1.2rem';
+
+    const hint = document.createElement('p');
+    hint.className = 'install-hint';
+    hint.textContent = isIOS
+      ? 'Removes the browser bar and gives you fullscreen play.'
+      : 'Install for fullscreen play with no browser bar.';
+    hint.style.fontSize = '0.75rem';
+    hint.style.color = 'rgba(255,255,255,0.55)';
+    hint.style.marginTop = '-0.25rem';
+    hint.style.marginBottom = '0.5rem';
+    hint.style.textAlign = 'center';
+    hint.style.lineHeight = '1.3';
+
+    const panel = menu.querySelector('.menu-panel');
+    if (!panel) return;
+    panel.appendChild(btn);
+    panel.appendChild(hint);
 
     btn.onclick = async () => {
       const prompt = (window as any).deferredInstallPrompt;
       if (prompt) {
         prompt.prompt();
         const { outcome } = await prompt.userChoice;
-        if (outcome === 'accepted') btn.remove();
+        if (outcome === 'accepted') {
+          this.hideInstallButton();
+          hint.remove();
+        }
         (window as any).deferredInstallPrompt = null;
-      } else if (/iPad|iPhone|iPod/i.test(navigator.userAgent)) {
-        alert('To install: Tap Share button below, then tap "Add to Home Screen"');
+      } else if (isIOS) {
+        // iOS Safari never fires beforeinstallprompt. The user has to
+        // use the system Share sheet. Show inline instructions instead
+        // of an alert so it works in fullscreen PWA too.
+        this.showIosInstallInstructions();
       }
     };
-    menu.querySelector('.menu-panel')?.appendChild(btn);
+  }
+
+  private showIosInstallInstructions() {
+    // Remove any existing overlay first.
+    const existing = document.getElementById('ios-install-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'ios-install-overlay';
+    overlay.style.cssText = `
+      position: fixed; inset: 0; z-index: 1000;
+      background: rgba(0,0,0,0.85);
+      display: flex; align-items: center; justify-content: center;
+      padding: 1.5rem;
+    `;
+
+    const card = document.createElement('div');
+    card.style.cssText = `
+      background: #1a1a2e; color: white;
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 16px; padding: 1.5rem;
+      max-width: 340px; width: 100%;
+      font-family: 'Nunito', sans-serif;
+      text-align: center;
+    `;
+    card.innerHTML = `
+      <div style="font-family:'Fredoka One',cursive; font-size:1.4rem; color:#00d9ff; margin-bottom:0.75rem;">
+        Install snek.io
+      </div>
+      <div style="font-size:0.95rem; line-height:1.5; margin-bottom:1rem; color:rgba(255,255,255,0.9);">
+        1. Tap the <b>Share</b> button below<br>
+        <span style="font-size:1.4rem;">⬆️</span><br>
+        2. Scroll down and tap<br>
+        <b>"Add to Home Screen"</b> ➕<br>
+        3. Tap <b>Add</b>
+      </div>
+      <div style="font-size:0.8rem; color:rgba(255,255,255,0.6); margin-bottom:1rem;">
+        Launches in fullscreen — no browser bar.
+      </div>
+    `;
+
+    const close = document.createElement('button');
+    close.textContent = 'Got it';
+    close.className = 'play-btn';
+    close.style.fontSize = '0.95rem';
+    close.style.padding = '0.5rem 1.5rem';
+    close.onclick = () => overlay.remove();
+    card.appendChild(close);
+
+    overlay.appendChild(card);
+    overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+    document.body.appendChild(overlay);
   }
 
   enableLandscapeOrientation() {
