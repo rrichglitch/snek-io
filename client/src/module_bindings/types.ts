@@ -99,3 +99,9 @@ export const SnakeSegment = __t.object("SnakeSegment", {
 });
 export type SnakeSegment = __Infer<typeof SnakeSegment>;
 
+export const WorldPaused = __t.object("WorldPaused", {
+  singleton: __t.bool(),
+  paused: __t.bool(),
+});
+export type WorldPaused = __Infer<typeof WorldPaused>;
+

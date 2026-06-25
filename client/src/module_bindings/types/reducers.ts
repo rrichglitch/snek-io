@@ -10,9 +10,11 @@ import ActivateDashReducer from "../activate_dash_reducer";
 import ChangeDirectionReducer from "../change_direction_reducer";
 import JoinGameReducer from "../join_game_reducer";
 import LeaveGameReducer from "../leave_game_reducer";
+import StopWorldTickReducer from "../stop_world_tick_reducer";
 
 export type ActivateDashParams = __Infer<typeof ActivateDashReducer>;
 export type ChangeDirectionParams = __Infer<typeof ChangeDirectionReducer>;
 export type JoinGameParams = __Infer<typeof JoinGameReducer>;
 export type LeaveGameParams = __Infer<typeof LeaveGameReducer>;
+export type StopWorldTickParams = __Infer<typeof StopWorldTickReducer>;
 

@@ -301,6 +301,18 @@ const GameTick = table(
   }
 );
 
+// Singleton flag table that gates the tick reducer's self-reschedule.
+// When `paused = true`, the tick runs its work but does NOT insert
+// the next scheduled row, breaking the chain. Used by on_disconnect
+// and stop_world_tick to atomically stop the 20 Hz tick.
+const WorldPaused = table(
+  { name: 'world_paused', public: false },
+  {
+    singleton: t.bool().primaryKey(),
+    paused: t.bool(),
+  }
+);
+
 const spacetimedb = schema({
   player: Player,
   snake_segment: SnakeSegment,
@@ -311,6 +323,7 @@ const spacetimedb = schema({
   player_joined_event: PlayerJoinedEvent,
   bot_died_event: BotDiedEvent,
   game_tick: GameTick,
+  world_paused: WorldPaused,
 });
 
 // ============================================================
@@ -430,6 +443,11 @@ export const join_game = spacetimedb.reducer(
       x: pos.x,
       y: pos.y,
     });
+
+    // Arm the tick. This is the canonical "a real player has
+    // entered the world" signal — on_connect alone is not enough
+    // because it also fires for spectators and background tabs.
+    ensureTickScheduled(ctx);
   }
 );
 
@@ -893,6 +911,25 @@ tickReducer = spacetimedb.reducer(
     if (livePlayerCount + liveBotCount < MIN_SNAKES) {
       for (let i = 0; i < MIN_SNAKES - livePlayerCount - liveBotCount; i++) spawnBot(ctx);
     }
+
+    // Self-reschedule. We use a one-shot Time() row (not Interval)
+    // so the schedule is fully stoppable. The world_paused flag is
+    // the durable stop — it ensures the chain breaks even if a
+    // tick is already in flight when stopTick / on_disconnect
+    // clears the row. setPaused(true) is called BEFORE the row
+    // delete in stopTick, so the in-flight tick sees paused=true
+    // when it gets to this point and short-circuits. Without the
+    // flag, deleting the row races with the engine's pending fire
+    // and the chain self-heals within one tick interval.
+    const paused = ctx.db.world_paused.singleton.find(false);
+    if (paused && paused.paused) {
+      return;
+    }
+
+    ctx.db.game_tick.insert({
+      scheduled_id: 0n,
+      scheduled_at: ScheduleAt.time(now + TICK_INTERVAL_US + 1000n),
+    });
   }
 );
 
@@ -902,15 +939,40 @@ export const tick = tickReducer;
 // Connection lifecycle
 // ============================================================
 
+function setPaused(ctx: any, paused: boolean): void {
+  const existing = ctx.db.world_paused.singleton.find(false);
+  if (existing) {
+    if (existing.paused !== paused) {
+      ctx.db.world_paused.singleton.update({ singleton: existing.singleton, paused });
+    }
+  } else {
+    ctx.db.world_paused.insert({ singleton: false, paused });
+  }
+}
+
+// Arm the tick. The world is "active" — clear the pause flag and
+// insert a scheduled row if one isn't already pending. Called from
+// join_game (real player joining) — NOT from on_connect, because
+// on_connect also fires for spectator clients, PWA background
+// tabs, and reconnecting sockets that never intend to play.
 function ensureTickScheduled(ctx: any) {
+  setPaused(ctx, false);
   for (const _ of ctx.db.game_tick.iter()) return; // already scheduled
+  // Self-rescheduling chain (see tick reducer). One-shot at
+  // now+50ms; the tick reducer inserts the next one when it fires.
   ctx.db.game_tick.insert({
     scheduled_id: 0n,
-    scheduled_at: ScheduleAt.interval(TICK_INTERVAL_US),
+    scheduled_at: ScheduleAt.time(BigInt(Date.now()) + TICK_INTERVAL_US),
   });
 }
 
 function stopTick(ctx: any) {
+  // Set the pause flag FIRST. If a tick is in flight, its self-
+  // reschedule step will see paused=true and skip the insert,
+  // breaking the chain. Then drop every scheduled game_tick row
+  // so no new fires can be queued while we wait for the in-flight
+  // tick to drain.
+  setPaused(ctx, true);
   // Drop every scheduled game_tick row to unschedule the reducer.
   // Skipping the .delete() on a copy of the iterator and deleting
   // the row directly from the table is safe because the index is
@@ -921,10 +983,14 @@ function stopTick(ctx: any) {
 }
 
 export const on_connect = spacetimedb.clientConnected((ctx: any) => {
-  // First client to arrive brings the world back to life. The
-  // tick reducer's MIN_SNAKES top-up will respawn any bots that
-  // died while the tick was off, so we don't have to re-seed here.
-  ensureTickScheduled(ctx);
+  // Don't arm the tick here. on_connect fires for every TCP/WS
+  // connection, including spectator clients, PWA background tabs,
+  // and reconnecting sockets that never call join_game. If we
+  // armed the tick here, the world would be "active" (and burning
+  // resources) whenever any of those was connected, even with 0
+  // real players. The tick is armed by join_game (a real player
+  // is entering) and disarmed by on_disconnect when player.count()
+  // drops to 0.
 });
 
 export const on_disconnect = spacetimedb.clientDisconnected((ctx: any) => {
@@ -950,7 +1016,7 @@ export const on_disconnect = spacetimedb.clientDisconnected((ctx: any) => {
   // If the world is empty of players, stop the tick so we stop
   // burning bytes-scanned + bytes-written on bot movement that
   // nobody is watching. The next player to connect will re-arm
-  // the schedule in on_connect. Bots and food persist in the DB,
+  // the schedule in join_game. Bots and food persist in the DB,
   // so the world resumes where it left off; MIN_SNAKES in the
   // tick will top the bot count back up to 10.
   const remainingPlayers = ctx.db.player.count();
@@ -962,7 +1028,37 @@ export const on_disconnect = spacetimedb.clientDisconnected((ctx: any) => {
 export const init = spacetimedb.init((ctx: any) => {
   spawnInitialFood(ctx, MAX_FOOD);
   for (let i = 0; i < MIN_SNAKES; i++) spawnBot(ctx);
-  ensureTickScheduled(ctx);
+  // Don't schedule the tick here. The world sits frozen until a
+  // real player calls join_game (which arms the tick via
+  // ensureTickScheduled). Pre-fix, init armed the tick at boot,
+  // so the 20 Hz reducer fired 24/7 burning bytes-scanned +
+  // bytes-written + bytes-sent-to-clients on a world nobody was
+  // watching. The MIN_SNAKES top-up in the tick will repopulate
+  // any bots that died while the world was frozen, so the
+  // empty-tick state is self-healing on the first reconnect.
+  //
+  // init only runs on module creation (not on republish), so this
+  // doesn't help on redeploy. Use `spacetime call snek-io
+  // stop_world_tick` after publishing to flush any leftover
+  // schedule from a previous module version.
+  setPaused(ctx, true);
 });
+
+// One-shot cleanup: clears any leftover game_tick rows and sets
+// the world_paused flag, atomically stopping the 20 Hz tick
+// reducer. The flag is what makes the stop durable — without it,
+// an in-flight tick would self-reschedule and the chain would
+// come back to life. Useful for emergency stops when the normal
+// on_disconnect path is somehow bypassed (e.g. a stuck client
+// that has a player row but isn't really playing).
+export const stop_world_tick = spacetimedb.reducer(
+  {},
+  (ctx: any, _args: any) => {
+    setPaused(ctx, true);
+    for (const t of ctx.db.game_tick.iter()) {
+      ctx.db.game_tick.scheduled_id.delete(t.scheduled_id);
+    }
+  }
+);
 
 export default spacetimedb;
