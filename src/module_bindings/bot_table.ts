@@ -12,9 +12,16 @@ import {
 
 export default __t.row({
   id: __t.u64().primaryKey(),
-  ownerIdentity: __t.identity().name("owner_identity"),
-  segmentIndex: __t.u32().name("segment_index"),
+  name: __t.string(),
+  color: __t.string(),
+  score: __t.u32(),
+  length: __t.u32(),
+  direction: __t.f32(),
+  alive: __t.bool(),
   x: __t.f32(),
   y: __t.f32(),
-  width: __t.f32(),
+  pendingDirection: __t.f32().name("pending_direction"),
+  isDashing: __t.bool().name("is_dashing"),
+  dashEndTime: __t.u64().name("dash_end_time"),
+  dashCooldownEnd: __t.u64().name("dash_cooldown_end"),
 });

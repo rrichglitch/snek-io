@@ -1,0 +1,330 @@
+================================================================
+snek-io — SpacetimeDB maincloud cost audit
+File audited: spacetimedb/src/index.ts  (926 lines)
+================================================================
+
+1. WHAT ACTUALLY COSTS MONEY ON MAINCLOUD
+-----------------------------------------
+Maincloud bills on six "energy" resources. The 2.0.0 maincloud pricing
+page (spacetimedb.com/maincloud) gives the per-byte / per-row rates:
+
+    Bytes Scanned            400 eV / byte    $0.15 / TB     <<<< this is your 98%
+    Bytes Written          1,000 eV / byte    $0.39 / TB
+    Index Bytes Written    1,000 eV / byte    $0.39 / TB
+    Index Seek Operations  4,000 eV / seek    $1.60 / trillion
+    Bytes Sent To Clients 1,200,000 eV/byte   $0.28 / GB
+    Wasm Instructions     10,000 eV/instr     $3.89 / trillion
+    Table Data Storage     600 eV/byte/min    $10.00 / GB/mo
+
+"Bytes Scanned" is charged on every full-table scan, EVERY row that
+the engine has to materialize to evaluate a query, and every iter() /
+.filter() that does not hit an index. It is the classic "you didn't
+add an index" tax — and your codebase is paying a LOT of it.
+
+A few numbers that explain the burn:
+
+  - Tick interval     = 50,000 us  =  20 Hz
+  - MIN_SNAKES        = 10   (server keeps 10 bots alive even with 0 players)
+  - MAX_FOOD          = 200
+  - A typical 30-segment snake
+      snake_segment row:  u64 id (8) + identity (32) + u32 idx (4)
+                          + f32 x (4) + f32 y (4) + f32 width (4) = ~56 B
+  - 10 bots × ~30 segs = 300 bot_segment rows  ≈ 11 KB
+  - 10 players × ~30 segs = 300 snake_segment rows  ≈ 17 KB
+  - 200 food rows      ≈ 5 KB
+
+  So every tick scans  ~33 KB of segment rows + 5 KB of food + 1 KB
+  of snake/bot rows just to build the per-tick cache.  At 20 Hz that
+  is ~780 KB/s of bytes-scanned from the tick reducer alone — and
+  that is BEFORE the segment-by-segment update() loop, which the
+  engine also has to read the row to update it.
+
+  Worse: the cache is rebuilt every tick, and every row update
+  is also a read-then-write.  That doubles up.
+
+  And the segment tables are the ones that GROW as snakes eat — the
+  longer the game runs, the bigger the scans.
+
+
+2. THE SPECIFIC HOTSPOTS IN index.ts
+------------------------------------
+Each of these is a full-table scan of a large, ever-growing table.
+All of them can be converted to an index seek. From highest impact
+to lowest:
+
+  [A] join_game (line 381)         respawn path
+        for (const seg of ctx.db.snake_segment.iter()) {
+          if (seg.owner_identity.isEqual(sender)) {
+            ctx.db.snake_segment.id.delete(seg.id);
+          }
+        }
+      -> scans the ENTIRE snake_segment table per player respawn,
+         just to delete K rows.  With 300+ rows in the table,
+         that is ~17 KB of bytes-scanned per player respawn.
+
+  [B] leave_game (line 456)        player leaves
+        for (const seg of ctx.db.snake_segment.iter()) {
+          if (seg.owner_identity.isEqual(sender)) {
+            ctx.db.snake_segment.id.delete(seg.id);
+          }
+        }
+      -> same O(N) full scan on the largest table.
+
+  [C] on_disconnect (line 905)     client drops
+        for (const seg of ctx.db.snake_segment.iter()) {
+          if (!seg.owner_identity.isEqual(sender)) continue;
+          ...
+          ctx.db.snake_segment.id.delete(seg.id);
+        }
+      -> same O(N) full scan, run for every disconnect (mobile
+         tabs closing, flaky wifi, etc.).  This is likely the
+         SINGLE biggest contributor to bytes-scanned growth because
+         disconnects happen on a constant background rate even
+         when nobody is playing.
+
+  [D] killSnake (line 555)         snake dies
+        for (let i = 0; i < segments.length; i++) {
+          ...
+          if (kind === 'player')
+            ctx.db.snake_segment.id.delete(segments[i].id);
+          else
+            ctx.db.bot_segment.id.delete(segments[i].id);
+        }
+      -> NOT a full scan (operates on a per-snake list that was
+         already built in the tick).  OK as is.
+
+  [E] chooseBotDirection (bot AI)  per bot, per tick
+        for (const player of allPlayers) {
+          ...
+          for (let i = 1; i < segs.length; i++) {
+            if (distSq(...) < ...) ...
+          }
+        }
+      for (const otherBot of allBots) { ... }
+      -> these scan the in-memory cache, NOT the table, so they do
+         not cost bytes-scanned.  Just CPU.  Fine.
+
+  [F] tick reducer (line 800+)     per tick, 20 Hz
+        for (const seg of ctx.db.snake_segment.iter()) { ... }
+        for (const seg of ctx.db.bot_segment.iter())    { ... }
+        const foods = [...ctx.db.food.iter()];
+        const alivePlayers = [...ctx.db.player.iter()].filter(p => p.alive);
+        const aliveBots    = [...ctx.db.bot.iter()].filter(b => b.alive);
+      -> the segment iter is unavoidable as long as the cache is
+         built by reading the whole table; you cannot index-scan
+         "give me all segments grouped by owner."  But the
+         player/bot iter can be avoided with an index on `alive`
+         (see section 4 below) — most ticks only have a few alive
+         snakes.
+
+  [G] player_position_event        declared but never inserted
+        Looked at every reducer: there is no ctx.db.player_position_event
+        .insert(...) anywhere in index.ts.  The event table is defined,
+        the client subscribes to it, and it never fires.  Cheap to
+        remove but not a cost driver.
+
+  [H] spawn_food_reducer           shipped but unused
+        spacetimedb.bindings/ has a spawn_food_reducer.ts file, but
+        the server's tick reducer calls ctx.db.food.insert directly,
+        not the reducer.  Removing the unused export is cosmetic.
+
+
+3. THE FIX (by impact, biggest win first)
+-----------------------------------------
+
+  FIX 1 — Add a btree index on snake_segment.owner_identity
+  -------------------------------------------------------
+  TypeScript schema change, lines 189–199:
+
+    const SnakeSegment = table(
+      { name: 'snake_segment', public: true },
+      {
+        id: t.u64().primaryKey().autoInc(),
+        owner_identity: t.identity().index('btree'),  // <-- add this
+        segment_index: t.u32(),
+        x: t.f32(),
+        y: t.f32(),
+        width: t.f32().default(14.0),
+      }
+    );
+
+  Then in join_game (line 381), leave_game (line 456), and
+  on_disconnect (line 905), replace the O(N) iter-and-filter with
+  the indexed lookup:
+
+    for (const seg of ctx.db.snake_segment.owner_identity.filter(sender)) {
+      ctx.db.snake_segment.id.delete(seg.id);
+    }
+
+  Impact:
+    - Per respawn/leave/disconnect, bytes-scanned drops from
+      O(total snake_segment rows) to O(segments owned by that player).
+    - For 10 bots × 30 segs + N players, a single respawn used to
+      scan ~17 KB; with the index it scans ~60 B.
+    - Disconnects are the big win — they fire constantly from
+      mobile/background tabs.  Estimate: 5–10x reduction in
+      bytes-scanned per disconnect event.
+    - Costs a small number of index seeks (cheap: 4,000 eV / seek
+      = $1.60 / TRILLION) and adds "Index Bytes Written" and
+      "Index Key Data Storage" (the schema already has this tax
+      for the primary key, so the marginal cost is tiny).
+
+  FIX 2 — Add a btree index on bot_segment.bot_id
+  -----------------------------------------------
+  Same change, lines 220–230:
+
+    const BotSegment = table(
+      { name: 'bot_segment', public: true },
+      {
+        id: t.u64().primaryKey().autoInc(),
+        bot_id: t.u64().index('btree'),    // <-- add this
+        segment_index: t.u32(),
+        x: t.f32(),
+        y: t.f32(),
+        width: t.f32().default(14.0),
+      }
+    );
+
+  You don't currently O(N)-scan bot_segment anywhere (the AI uses
+  the in-memory cache), so this is preventative for future code
+  and makes any "delete all segments for bot X" call O(K) instead
+  of O(N).  Trivial to add, no downside.
+
+  FIX 3 — Make the tick's alive-filter cheap
+  ------------------------------------------
+  In the tick reducer (line 794), instead of:
+
+    const alivePlayers = [...ctx.db.player.iter()].filter(p => p.alive);
+    const aliveBots    = [...ctx.db.bot.iter()].filter(b => b.alive);
+
+  add a btree index on `alive` and use filter():
+
+    // in Player and Bot table definitions:
+    alive: t.bool().index('btree'),
+
+    // in tick:
+    const alivePlayers = [...ctx.db.player.alive.filter(true)];
+    const aliveBots    = [...ctx.db.bot.alive.filter(true)];
+
+  But: filter(true) is an equality scan, which still touches the
+  matching rows.  The actual saving is that you no longer touch
+  the dead-player rows.  In practice the number of dead rows is
+  small (players rarely sit at the menu), so this is a marginal
+  win — maybe 1–2x on the iter cost.  Optional.
+
+  A bigger structural win would be to not keep dead player rows
+  at all: instead of `ctx.db.player.identity.update({...snake,
+  alive: false, score: 0})` in killSnake, delete the row, and
+  store dead players in a separate, much smaller `tombstone` table
+  that exists only so the leaderboard can still see their name.
+  That removes a class of updates entirely.  Bigger refactor;
+  not needed for the 98% win.
+
+  FIX 4 — Use ScheduleAt.time() to skip empty ticks
+  -------------------------------------------------
+  The tick is currently fired by an interval schedule at 20 Hz
+  regardless of whether anyone is connected.  When the server is
+  idle (no players, no connected clients), this is pure waste —
+  20 Hz of bytes-scanned, 20 Hz of bytes-written (segment
+  positions), and 20 Hz of bytes-sent to zero clients.
+
+  SpacetimeDB 2.0 supports schedule reducers and ScheduleAt.time().
+  Concrete plan:
+
+    a) Make ensureTickScheduled only run when there is at least
+       one connected client.  ctx.db.<connectionTable>.count() > 0
+       is the simplest gate.
+
+    b) Inside the tick, if there are zero players AND zero bots
+       in motion (e.g. you store a "ticks_idle" counter), advance
+       the schedule less often — say 1 Hz — so the world does not
+       rot (food still spawns, bots still drift) but bytes-scanned
+       drops 20x during off-hours.
+
+  Impact: 5–20x reduction in bytes-scanned on idle servers.  Given
+  that maincloud scales to zero when the DB is idle, this is only
+  a concern for when 1+ client is connected but no one is playing
+  — common in a public web game.
+
+  FIX 5 — Stop inserting player_position_event if you don't use it
+  -----------------------------------------------------------------
+  (line 242–250, the event table itself + subscription in client)
+
+  The table is public, so the client SUBSCRIBES to it on every
+  connection, and SpacetimeDB will hold a tiny "I have 0 events"
+  per-client subscription state.  Removing the table removes that
+  micro-cost AND a small amount of code complexity.  Free win.
+
+  You would need to also drop it from the client's subscription
+  list at game.ts:170 and regenerate module_bindings (spacetime
+  generate).  I will do that for you.
+
+  FIX 6 — Move food color to a deterministic palette lookup
+  ---------------------------------------------------------
+  Not a bytes-scanned fix.  Food color is a string per row, which
+  is silly for 200 rows × N clients' subscription updates.  If
+  you wanted to be aggressive, food could be a `t.u8()` (index
+  into COLORS array) and the client renders from the shared
+  COLORS list.  Reduces row size and bytes-sent-to-clients by
+  ~8 bytes/food/second.  Skip for now — bytes-sent is not the
+  reported bottleneck.
+
+
+4. ESTIMATED IMPACT OF FIX 1 + 2 (the big one)
+----------------------------------------------
+If your DB currently uses X bytes-scanned / month, the disconnect
+path alone is probably responsible for 30–60% of it (disconnects
+are 24/7 from flaky mobile/background tabs), and the
+respawn/leave path is another 10–20%.
+
+Applying Fix 1 + 2 should reduce bytes-scanned on those paths by
+roughly the size of the snake_segment table divided by the average
+segments-per-player.  With 10 bots × 30 segs = 300 rows, and an
+average player owning 30 segs, the ratio is 10x.  Disconnects
+also stopping iterating dead bots' segments is a separate factor.
+
+Conservative estimate: 50–70% reduction in bytes-scanned on
+paths [A]/[B]/[C].  Combined with the existing per-tick cache,
+your overall bytes-scanned should drop to ~30–50% of current.
+
+If we layer in Fix 4 (skip idle ticks), expect another big
+multiplicative drop during quiet hours.
+
+The bytes-written and bytes-sent-to-clients costs are a separate
+story — I can address those in a follow-up if you want, but you
+specifically said 98% is bytes-scanned, so I'm focusing there.
+
+
+5. RISKS / GOTCHAS
+------------------
+- Adding an index to snake_segment.owner_identity and
+  bot_segment.bot_id will trigger a schema migration on maincloud.
+  spacetimedb publish handles this; it just takes a few seconds
+  and there is a brief downtime window.  No data is lost (the
+  tables are recreated and the existing rows re-indexed).
+- The btree index adds a small per-row storage cost (Index Key
+  Data Storage at $10/GB/mo).  For 600 segment rows × ~40 B/row
+  index overhead, that is ~24 KB, essentially free.
+- The index will not change the API; clients will not notice.
+- snake_segment.id (primary key) already has an index, so .id
+  lookups and .id.update/.id.delete already use index seeks.
+  This audit is specifically about the owner_identity / bot_id
+  columns, which currently have NO index.
+
+
+6. FILES TO CHANGE
+------------------
+  spacetimedb/src/index.ts        (add 2 indexes, swap 3 iter-loops,
+                                   optionally gate the tick on
+                                   connection count, optionally drop
+                                   player_position_event)
+  client/src/game.ts:170          (drop player_position_event from
+                                   subscription list)
+  client/src/module_bindings/     (regenerate with `spacetime generate`)
+
+Want me to apply Fix 1, 2, 4, 5 as a single patch?  It is a
+~30-line diff, low risk, and you can redeploy via
+  cd spacetimedb && spacetime publish snek-io --server maincloud
+which will trigger a ~3-second migration on maincloud.
+
+================================================================

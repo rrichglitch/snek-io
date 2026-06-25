@@ -11,5 +11,6 @@ import {
 } from "spacetimedb";
 
 export default {
-  direction: __t.f32(),
+  name: __t.string(),
+  color: __t.string(),
 };

@@ -89,14 +89,6 @@ export const PlayerJoinedEvent = __t.object("PlayerJoinedEvent", {
 });
 export type PlayerJoinedEvent = __Infer<typeof PlayerJoinedEvent>;
 
-export const PlayerPositionEvent = __t.object("PlayerPositionEvent", {
-  identity: __t.identity(),
-  x: __t.f32(),
-  y: __t.f32(),
-  direction: __t.f32(),
-});
-export type PlayerPositionEvent = __Infer<typeof PlayerPositionEvent>;
-
 export const SnakeSegment = __t.object("SnakeSegment", {
   id: __t.u64(),
   ownerIdentity: __t.identity(),

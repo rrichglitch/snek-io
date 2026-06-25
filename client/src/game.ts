@@ -167,7 +167,6 @@ export class Game {
             tables.bot,
             tables.bot_segment,
             tables.food,
-            tables.player_position_event,
             tables.player_joined_event,
             tables.player_died_event,
             tables.bot_died_event,
@@ -351,20 +350,6 @@ export class Game {
     c.db.food.onDelete((_ctx, f) => {
       const idx = this.foods.findIndex(x => x.id === f.id);
       if (idx >= 0) this.foods.splice(idx, 1);
-    });
-
-    c.db.player_position_event.onInsert((_ctx, ev) => {
-      const p = this.players.get(ev.identity.toString());
-      if (p) {
-        p.x = ev.x;
-        p.y = ev.y;
-        p.direction = ev.direction;
-      }
-      // Record the server-authoritative position with a timestamp so the
-      // render loop can lerp toward it over the interpolation window.
-      this.lastServerPositions.set(ev.identity.toString(), {
-        x: ev.x, y: ev.y, direction: ev.direction, t: performance.now(),
-      });
     });
 
     c.db.player_died_event.onInsert((_ctx, ev) => {

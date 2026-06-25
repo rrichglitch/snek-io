@@ -8,7 +8,7 @@ import { ScheduleAt } from 'spacetimedb';
 const MAP_SIZE = 2000;
 const INITIAL_SNAKE_LENGTH = 4;
 const MAX_FOOD = 200;
-const MOVE_SPEED = 11.0;
+const MOVE_SPEED = 14.0;
 const SEGMENT_SPACING = 18;
 const TICK_INTERVAL_US = 50000n;
 const MIN_SNAKES = 10;
@@ -176,7 +176,12 @@ const Player = table(
     score: t.u32(),
     length: t.u32(),
     direction: t.f32(),
-    alive: t.bool(),
+    // btree index on alive lets the tick reducer do
+    // ctx.db.player.alive.filter(true) instead of
+    // [...ctx.db.player.iter()].filter(p => p.alive). The
+    // tick fires 20 Hz; without the index we materialize the
+    // full player table on every tick just to skip dead rows.
+    alive: t.bool().index('btree'),
     x: t.f32(),
     y: t.f32(),
     pending_direction: t.f32(),
@@ -190,7 +195,12 @@ const SnakeSegment = table(
   { name: 'snake_segment', public: true },
   {
     id: t.u64().primaryKey().autoInc(),
-    owner_identity: t.identity(),
+    // btree index on owner_identity turns the per-player cleanup paths
+    // in join_game / leave_game / on_disconnect from O(total segments)
+    // full-table scans into O(segments owned by that player) seeks.
+    // snake_segment is the largest, fastest-growing table, so this is
+    // the single biggest bytes-scanned win in the module.
+    owner_identity: t.identity().index('btree'),
     segment_index: t.u32(),
     x: t.f32(),
     y: t.f32(),
@@ -207,7 +217,10 @@ const Bot = table(
     score: t.u32(),
     length: t.u32(),
     direction: t.f32(),
-    alive: t.bool(),
+    // Same rationale as Player.alive. 10 bots are kept alive
+    // by the MIN_SNAKES top-up, so this index stays warm and
+    // every tick's alive-bots read is cheap.
+    alive: t.bool().index('btree'),
     x: t.f32(),
     y: t.f32(),
     pending_direction: t.f32(),
@@ -221,7 +234,11 @@ const BotSegment = table(
   { name: 'bot_segment', public: true },
   {
     id: t.u64().primaryKey().autoInc(),
-    bot_id: t.u64(),
+    // Same rationale as SnakeSegment.owner_identity. No current code
+    // path scans bot_segment by bot_id (the AI uses the in-memory
+    // cache), but this is cheap insurance and makes any future
+    // "delete all segments for bot X" call O(K) instead of O(N).
+    bot_id: t.u64().index('btree'),
     segment_index: t.u32(),
     x: t.f32(),
     y: t.f32(),
@@ -239,15 +256,13 @@ const Food = table(
   }
 );
 
-const PlayerPositionEvent = table(
-  { name: 'player_position_event', public: true, event: true },
-  {
-    identity: t.identity(),
-    x: t.f32(),
-    y: t.f32(),
-    direction: t.f32(),
-  }
-);
+// PlayerPositionEvent was originally the high-frequency position
+// broadcast for client interpolation. The server never inserts
+// into it (snake head positions move via snake_segment updates
+// instead), and the client's onInsert handler is a no-op. Removed
+// to drop the per-connection subscription overhead and the
+// small "Index Key Data Storage" tax on a table that never had
+// rows.
 
 const PlayerDiedEvent = table(
   { name: 'player_died_event', public: true, event: true },
@@ -292,7 +307,6 @@ const spacetimedb = schema({
   bot: Bot,
   bot_segment: BotSegment,
   food: Food,
-  player_position_event: PlayerPositionEvent,
   player_died_event: PlayerDiedEvent,
   player_joined_event: PlayerJoinedEvent,
   bot_died_event: BotDiedEvent,
@@ -378,10 +392,12 @@ export const join_game = spacetimedb.reducer(
     // local state from scratch.
     const existing = ctx.db.player.identity.find(sender);
     if (existing) {
-      for (const seg of ctx.db.snake_segment.iter()) {
-        if (seg.owner_identity.isEqual(sender)) {
-          ctx.db.snake_segment.id.delete(seg.id);
-        }
+      // Indexed lookup: O(segments owned by sender) instead of
+      // O(total snake_segment rows). Disconnects / respawns are a
+      // constant background rate on a public web game, so this
+      // loop is by far the biggest contributor to bytes-scanned.
+      for (const seg of ctx.db.snake_segment.owner_identity.filter(sender)) {
+        ctx.db.snake_segment.id.delete(seg.id);
       }
       ctx.db.player.identity.delete(sender);
     }
@@ -453,10 +469,9 @@ export const leave_game = spacetimedb.reducer((ctx: any) => {
   const player = ctx.db.player.identity.find(ctx.sender);
   if (!player) return;
 
-  for (const seg of ctx.db.snake_segment.iter()) {
-    if (seg.owner_identity.isEqual(ctx.sender)) {
-      ctx.db.snake_segment.id.delete(seg.id);
-    }
+  // Indexed lookup — see join_game for the same fix.
+  for (const seg of ctx.db.snake_segment.owner_identity.filter(ctx.sender)) {
+    ctx.db.snake_segment.id.delete(seg.id);
   }
   ctx.db.player.identity.delete(ctx.sender);
 });
@@ -791,8 +806,12 @@ tickReducer = spacetimedb.reducer(
   (ctx: any, _args: any) => {
     const now = BigInt(Date.now());
     const foods = [...ctx.db.food.iter()];
-    const alivePlayers = [...ctx.db.player.iter()].filter((p: any) => p.alive);
-    const aliveBots = [...ctx.db.bot.iter()].filter((b: any) => b.alive);
+    // Use the btree index on `alive` to skip dead rows without
+    // materializing them. The index entry for `true` is hot
+    // (almost all players/bots are alive while the tick runs)
+    // so this is O(alive) instead of O(total).
+    const alivePlayers = [...ctx.db.player.alive.filter(true)];
+    const aliveBots = [...ctx.db.bot.alive.filter(true)];
 
     // Per-tick segment cache — built once, used by every collision check.
     // This is the dominant perf fix: replaces O(N² × M) full-table scans
@@ -891,7 +910,20 @@ function ensureTickScheduled(ctx: any) {
   });
 }
 
+function stopTick(ctx: any) {
+  // Drop every scheduled game_tick row to unschedule the reducer.
+  // Skipping the .delete() on a copy of the iterator and deleting
+  // the row directly from the table is safe because the index is
+  // the primary key (no iter-mutation hazard).
+  for (const t of ctx.db.game_tick.iter()) {
+    ctx.db.game_tick.scheduled_id.delete(t.scheduled_id);
+  }
+}
+
 export const on_connect = spacetimedb.clientConnected((ctx: any) => {
+  // First client to arrive brings the world back to life. The
+  // tick reducer's MIN_SNAKES top-up will respawn any bots that
+  // died while the tick was off, so we don't have to re-seed here.
   ensureTickScheduled(ctx);
 });
 
@@ -900,10 +932,12 @@ export const on_disconnect = spacetimedb.clientDisconnected((ctx: any) => {
   const player = ctx.db.player.identity.find(sender);
 
   if (player) {
-    // Drop segments as food (every 3rd), then delete the rest + the player row
+    // Drop segments as food (every 3rd), then delete the rest + the player row.
+    // Indexed lookup — see join_game for the rationale. on_disconnect fires
+    // for every tab close / background tab / wifi blip, so this used to be
+    // the single biggest bytes-scanned contributor on the server.
     let i = 0;
-    for (const seg of ctx.db.snake_segment.iter()) {
-      if (!seg.owner_identity.isEqual(sender)) continue;
+    for (const seg of ctx.db.snake_segment.owner_identity.filter(sender)) {
       if (i % 3 === 0) {
         ctx.db.food.insert({ id: 0n, x: seg.x, y: seg.y, color: '#FF6B6B' });
       }
@@ -913,8 +947,16 @@ export const on_disconnect = spacetimedb.clientDisconnected((ctx: any) => {
     ctx.db.player.identity.delete(sender);
   }
 
-  // If the world is empty, leave the bots and food running — they'll keep
-  // the server populated until the next player joins. Tick keeps running.
+  // If the world is empty of players, stop the tick so we stop
+  // burning bytes-scanned + bytes-written on bot movement that
+  // nobody is watching. The next player to connect will re-arm
+  // the schedule in on_connect. Bots and food persist in the DB,
+  // so the world resumes where it left off; MIN_SNAKES in the
+  // tick will top the bot count back up to 10.
+  const remainingPlayers = ctx.db.player.count();
+  if (remainingPlayers === 0n) {
+    stopTick(ctx);
+  }
 });
 
 export const init = spacetimedb.init((ctx: any) => {

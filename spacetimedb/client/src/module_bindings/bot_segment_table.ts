@@ -10,6 +10,11 @@ import {
   type Infer as __Infer,
 } from "spacetimedb";
 
-export default {
-  direction: __t.f32(),
-};
+export default __t.row({
+  id: __t.u64().primaryKey(),
+  botId: __t.u64().name("bot_id"),
+  segmentIndex: __t.u32().name("segment_index"),
+  x: __t.f32(),
+  y: __t.f32(),
+  width: __t.f32(),
+});

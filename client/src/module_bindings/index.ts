@@ -49,7 +49,6 @@ import FoodRow from "./food_table";
 import PlayerRow from "./player_table";
 import PlayerDiedEventRow from "./player_died_event_table";
 import PlayerJoinedEventRow from "./player_joined_event_table";
-import PlayerPositionEventRow from "./player_position_event_table";
 import SnakeSegmentRow from "./snake_segment_table";
 
 /** Type-only namespace exports for generated type groups. */
@@ -59,6 +58,9 @@ const tablesSchema = __schema({
   bot: __table({
     name: 'bot',
     indexes: [
+      { name: 'alive', algorithm: 'btree', columns: [
+        'alive',
+      ] },
       { name: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
@@ -78,6 +80,9 @@ const tablesSchema = __schema({
   bot_segment: __table({
     name: 'bot_segment',
     indexes: [
+      { name: 'bot_id', algorithm: 'btree', columns: [
+        'botId',
+      ] },
       { name: 'id', algorithm: 'btree', columns: [
         'id',
       ] },
@@ -100,6 +105,9 @@ const tablesSchema = __schema({
   player: __table({
     name: 'player',
     indexes: [
+      { name: 'alive', algorithm: 'btree', columns: [
+        'alive',
+      ] },
       { name: 'identity', algorithm: 'btree', columns: [
         'identity',
       ] },
@@ -124,19 +132,14 @@ const tablesSchema = __schema({
     ],
     event: true,
   }, PlayerJoinedEventRow),
-  player_position_event: __table({
-    name: 'player_position_event',
-    indexes: [
-    ],
-    constraints: [
-    ],
-    event: true,
-  }, PlayerPositionEventRow),
   snake_segment: __table({
     name: 'snake_segment',
     indexes: [
       { name: 'id', algorithm: 'btree', columns: [
         'id',
+      ] },
+      { name: 'owner_identity', algorithm: 'btree', columns: [
+        'ownerIdentity',
       ] },
     ],
     constraints: [
